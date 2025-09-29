@@ -148,64 +148,58 @@ void UMinimapGeneratorManager::CheckStreamingAndCapture()
 
 			CaptureComponent->CaptureScene();
 
-			// Lấy các con trỏ cần thiết trên Game Thread
-			FTextureRenderTargetResource* RTResource = RenderTarget->GetRenderTargetResource();
+			// Bước 2 (Game Thread): Gửi một lệnh "Flush" để đảm bảo lệnh CaptureScene ở trên được thực thi.
+			// Lệnh này sẽ block Game Thread cho đến khi Rendering Thread bắt kịp.
+			// Điều này có thể gây một cái "hitch" nhẹ, nhưng nó đảm bảo dữ liệu của chúng ta là mới nhất.
+			FlushRenderingCommands();
+
+			// Bước 3 (Game Thread): Bây giờ, gửi một lệnh khác để đọc pixel.
 			const int32 TileX = CurrentTileIndex % NumTilesX;
-			const int32 TileY = CurrentTileIndex / NumTilesX;
+			const int32 TileY = CurrentTileIndex / NumTilesY;
+			TWeakObjectPtr<UMinimapGeneratorManager> ThisWeakPtr(this);
+			UTextureRenderTarget2D* RenderTargetPtr = RenderTarget;
 
-			// Tự bắt (capture) 'this' một cách an toàn bằng TWeakObjectPtr
-			const TWeakObjectPtr<UMinimapGeneratorManager> ThisWeakPtr(this);
-
-			// Tạo một struct để chứa lệnh cho Rendering Thread.
-			// Điều này đảm bảo tất cả các biến được copy một cách an toàn.
-			struct FReadPixelContext
-			{
-				FTextureRenderTargetResource* RenderTargetResource;
-				TWeakObjectPtr<UMinimapGeneratorManager> Manager;
-				int32 TileX;
-				int32 TileY;
-			};
-
-			FReadPixelContext ReadPixelContext = {RTResource, ThisWeakPtr, TileX, TileY};
-
-			// Gửi lệnh đến Rendering Thread
-			ENQUEUE_RENDER_COMMAND(ReadPixelsCommand)(
-				[ReadPixelContext](FRHICommandListImmediate& RHICmdList)
+			ENQUEUE_RENDER_COMMAND(ReadPixelDataFromRenderTarget)(
+				[RenderTargetPtr, ThisWeakPtr, TileX, TileY](FRHICommandListImmediate& RHICmdList) mutable
 				{
 					// --- BÂY GIỜ CHÚNG TA ĐANG Ở TRÊN RENDERING THREAD ---
+					// Code ở đây bây giờ chạy sau khi Game Thread đã được flush, giảm thiểu nguy cơ deadlock.
+            
+					FTextureRenderTargetResource* RTResource = RenderTargetPtr->GetRenderTargetResource();
+					if (!RTResource) return;
+
 					TArray<FColor> PixelData;
-					FReadSurfaceDataFlags ReadPixelFlags(ERangeCompressionMode::RCM_UNorm);
+					FReadSurfaceDataFlags ReadPixelFlags;
 					ReadPixelFlags.SetLinearToGamma(false);
+            
+					// Lệnh đọc pixel, bây giờ an toàn hơn nhiều
+					RTResource->ReadPixels(PixelData, ReadPixelFlags);
 
-					// Lệnh này bây giờ hoàn toàn an toàn
-					ReadPixelContext.RenderTargetResource->ReadPixels(PixelData, ReadPixelFlags);
-
-					// Gửi dữ liệu đọc được về lại Game Thread
-					AsyncTask(ENamedThreads::GameThread,
-					          [Manager = ReadPixelContext.Manager, TileX = ReadPixelContext.TileX, TileY =
-						          ReadPixelContext.TileY, Pixels = MoveTemp(PixelData)]() mutable
-					          {
-						          // --- BÂY GIỜ CHÚNG TA ĐÃ QUAY LẠI GAME THREAD ---
-						          if (Manager.IsValid())
-						          {
-							          Manager->OnTileCaptureCompleted(TileX, TileY, MoveTemp(Pixels));
-						          }
-					          });
+					// Gửi dữ liệu về lại Game Thread
+					AsyncTask(ENamedThreads::GameThread, [Manager = ThisWeakPtr, TX = TileX, TY = TileY, Pixels = MoveTemp(PixelData)]() mutable
+					{
+						if (Manager.IsValid())
+						{
+							Manager->OnTileCaptureCompleted(TX, TY, MoveTemp(Pixels));
+						}
+					});
 				}
 			);
 
 			// --- LOGIC Ở GAME THREAD TIẾP TỤC NGAY LẬP TỨC ---
-			// Unregister streaming source và chuyển sang tile tiếp theo
-			const UWorld* LocalWorld = GEditor->GetEditorWorldContext().World();
-			if (UWorldPartitionSubsystem* WorldPartitionSubsystem = LocalWorld->GetSubsystem<UWorldPartitionSubsystem>())
+			// (Phần code unregister streamer và chuyển sang tile tiếp theo giữ nguyên)
+			if (UWorldPartitionSubsystem* LocalWp = World->GetSubsystem<UWorldPartitionSubsystem>())
 			{
-				WorldPartitionSubsystem->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
+				if (MinimapStreamer.IsValid() && LocalWp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
+				{
+					LocalWp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
+				}
 			}
-	
+
 			CurrentTileIndex++;
 
 			FTimerHandle NextTileDelayHandle;
-			LocalWorld->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile,
+			World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile,
 			                                  0.1f, false);
 		}
 	}
