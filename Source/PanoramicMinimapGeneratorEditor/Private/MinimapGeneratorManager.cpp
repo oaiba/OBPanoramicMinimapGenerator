@@ -4,11 +4,10 @@
 #include "MinimapGeneratorManager.h"
 
 #include "Editor.h"
-#include "Engine/SceneCapture2D.h"
-#include "Components/SceneCaptureComponent2D.h"
-#include "Engine/TextureRenderTarget2D.h"
+#include "HighResScreenshot.h"
 #include "IImageWrapperModule.h"
 #include "IImageWrapper.h"
+#include "LevelEditorViewport.h"
 #include "MinimapStreamingSource.h"
 #include "HAL/FileManager.h"
 #include "Async/Async.h"
@@ -28,67 +27,68 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Invalid grid size calculated."), *GetName(), *FString(__FUNCTION__));
 		return;
 	}
-
-	UWorld* World = GEditor->GetEditorWorldContext().World();
-	CaptureActor = World->SpawnActor<ASceneCapture2D>();
-	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
-
-	// --- Configure Capture Component ---
-	CaptureComponent->bCaptureEveryFrame = false;
-	CaptureComponent->bCaptureOnMovement = false;
-	CaptureComponent->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
-
-	CaptureComponent->ShowFlags.SetMotionBlur(false);
-	CaptureComponent->ShowFlags.SetTemporalAA(false);
-	CaptureComponent->ShowFlags.SetAntiAliasing(true);
-	CaptureComponent->PostProcessSettings.bOverride_MotionBlurAmount = true;
-	CaptureComponent->PostProcessSettings.MotionBlurAmount = 0.0f;
-
-	if (Settings.bIsOrthographic)
-	{
-		CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
-	}
-	else
-	{
-		CaptureComponent->ProjectionType = ECameraProjectionMode::Perspective;
-		CaptureComponent->FOVAngle = Settings.CameraFOV;
-	}
-
-	RenderTarget = NewObject<UTextureRenderTarget2D>();
-	RenderTarget->InitCustomFormat(Settings.TileResolution, Settings.TileResolution, PF_B8G8R8A8, true);
-	CaptureComponent->TextureTarget = RenderTarget;
-
-	// Create our custom streaming source provider
 	MinimapStreamer = MakeShared<FMinimapStreamingSourceProvider>();
+	ScreenshotCapturedDelegateHandle = FScreenshotRequest::OnScreenshotCaptured().AddUObject(
+		this, &UMinimapGeneratorManager::OnScreenshotCaptured);
 
-	// Start processing the first tile, this is the one and only starting point.
+	// Bắt đầu xử lý tile đầu tiên
 	ProcessNextTile();
 }
 
 void UMinimapGeneratorManager::CalculateGrid()
 {
-	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
+	// The logic should be based on pixel space, not world space, to ensure the final stitched image is correct.
+	const int32 EffectiveTileWidth = Settings.TileResolution - Settings.TileOverlap;
+	const int32 EffectiveTileHeight = Settings.TileResolution - Settings.TileOverlap;
 
-	// A more robust calculation is needed here based on ortho width or FOV and camera height
-	// For now, let's use a simplified approach for demonstration
-	const FVector2D WorldDimensions(BoundsSize.X, BoundsSize.Y);
+	if (EffectiveTileWidth <= 0 || EffectiveTileHeight <= 0)
+	{
+		UE_LOG(LogTemp, Error,
+			   TEXT("[%s::%s] - Effective tile size is zero or negative. TileOverlap might be too large."), *GetName(),
+			   *FString(__FUNCTION__));
+		NumTilesX = 0;
+		NumTilesY = 0;
+		return;
+	}
 
-	// Calculate how much world space a single non-overlapping tile covers
-	const float TileWorldSize = Settings.TileResolution * (WorldDimensions.X / Settings.OutputWidth); // Example scale
-	const float OverlapWorldSize = Settings.TileOverlap * (WorldDimensions.X / Settings.OutputWidth);
+	// Calculate how many tiles are needed to cover the output dimensions.
+	// The first tile covers 'TileResolution' pixels. Each subsequent tile adds 'EffectiveTileWidth' pixels.
+	if (Settings.OutputWidth <= Settings.TileResolution)
+	{
+		NumTilesX = 1;
+	}
+	else
+	{
+		NumTilesX = 1 + FMath::CeilToInt(
+			static_cast<float>(Settings.OutputWidth - Settings.TileResolution) / EffectiveTileWidth);
+	}
 
-	const float StepSize = TileWorldSize - OverlapWorldSize;
+	if (Settings.OutputHeight <= Settings.TileResolution)
+	{
+		NumTilesY = 1;
+	}
+	else
+	{
+		NumTilesY = 1 + FMath::CeilToInt(
+			static_cast<float>(Settings.OutputHeight - Settings.TileResolution) / EffectiveTileHeight);
+	}
 
-	NumTilesX = FMath::CeilToInt(WorldDimensions.X / StepSize);
-	NumTilesY = FMath::CeilToInt(WorldDimensions.Y / StepSize);
-
-	UE_LOG(LogTemp, Log, TEXT("Calculated Grid: %d x %d tiles"), NumTilesX, NumTilesY);
+	UE_LOG(LogTemp, Log, TEXT("[%s::%s] - Calculated Grid: %d x %d tiles"), *GetName(), *FString(__FUNCTION__),
+		   NumTilesX, NumTilesY);
 }
 
 void UMinimapGeneratorManager::ProcessNextTile()
 {
 	if (CurrentTileIndex >= NumTilesX * NumTilesY)
 	{
+		OnAllTasksCompleted();
+		return;
+	}
+
+	if (!MinimapStreamer.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - MinimapStreamer is not valid! Aborting process."), *GetName(),
+			   *FString(__FUNCTION__));
 		OnAllTasksCompleted();
 		return;
 	}
@@ -111,22 +111,28 @@ void UMinimapGeneratorManager::ProcessNextTile()
 
 	UE_LOG(LogTemp, Log, TEXT("Processing Tile (%d, %d) at location %s"), TileX, TileY, *TileCenter.ToString());
 
-	UWorld* World = GEditor->GetEditorWorldContext().World();
+	const UWorld* World = GEditor->GetEditorWorldContext().World();
 	// CORRECTED: Using the proper GetSubsystem method.
-	if (UWorldPartitionSubsystem* WP = World->GetSubsystem<UWorldPartitionSubsystem>())
+	if (UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
 	{
 		MinimapStreamer->SetSourceLocation(TileCenter, StreamingRadius);
-		WP->RegisterStreamingSourceProvider(MinimapStreamer.Get());
+		Wp->RegisterStreamingSourceProvider(MinimapStreamer.Get());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Failed to get WorldPartitionSubsystem! Aborting process."), *GetName(),
+			   *FString(__FUNCTION__));
+		OnAllTasksCompleted();
+		return;
 	}
 
 	World->GetTimerManager().SetTimer(StreamingCheckTimer, this, &UMinimapGeneratorManager::CheckStreamingAndCapture,
-	                                  0.1f, true);
+									  0.5f, true);
 }
 
 void UMinimapGeneratorManager::CheckStreamingAndCapture()
 {
 	const UWorld* World = GEditor->GetEditorWorldContext().World();
-	// CORRECTED: Using the proper GetSubsystem method.
 	if (const UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
 	{
 		if (Wp->IsStreamingCompleted(MinimapStreamer.Get()))
@@ -134,75 +140,108 @@ void UMinimapGeneratorManager::CheckStreamingAndCapture()
 			World->GetTimerManager().ClearTimer(StreamingCheckTimer);
 			UE_LOG(LogTemp, Log, TEXT("Streaming complete for tile %d."), CurrentTileIndex);
 
-			// --- Now, perform the capture ---
-			const FVector SourceLocation = MinimapStreamer->GetSourceLocation();
-			CaptureActor->SetActorLocation(FVector(SourceLocation.X, SourceLocation.Y, Settings.CameraHeight));
-			CaptureActor->SetActorRotation(FRotator(-90.f, 0.f, 0.f));
-
-			USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
-			if (Settings.bIsOrthographic)
-			{
-				const float TileWorldWidth = Settings.CaptureBounds.GetSize().X / NumTilesX;
-				CaptureComponent->OrthoWidth = TileWorldWidth;
-			}
-
-			CaptureComponent->CaptureScene();
-
-			// Bước 2 (Game Thread): Gửi một lệnh "Flush" để đảm bảo lệnh CaptureScene ở trên được thực thi.
-			// Lệnh này sẽ block Game Thread cho đến khi Rendering Thread bắt kịp.
-			// Điều này có thể gây một cái "hitch" nhẹ, nhưng nó đảm bảo dữ liệu của chúng ta là mới nhất.
-			FlushRenderingCommands();
-
-			// Bước 3 (Game Thread): Bây giờ, gửi một lệnh khác để đọc pixel.
-			const int32 TileX = CurrentTileIndex % NumTilesX;
-			const int32 TileY = CurrentTileIndex / NumTilesY;
-			TWeakObjectPtr<UMinimapGeneratorManager> ThisWeakPtr(this);
-			UTextureRenderTarget2D* RenderTargetPtr = RenderTarget;
-
-			ENQUEUE_RENDER_COMMAND(ReadPixelDataFromRenderTarget)(
-				[RenderTargetPtr, ThisWeakPtr, TileX, TileY](FRHICommandListImmediate& RHICmdList) mutable
-				{
-					// --- BÂY GIỜ CHÚNG TA ĐANG Ở TRÊN RENDERING THREAD ---
-					// Code ở đây bây giờ chạy sau khi Game Thread đã được flush, giảm thiểu nguy cơ deadlock.
-            
-					FTextureRenderTargetResource* RTResource = RenderTargetPtr->GetRenderTargetResource();
-					if (!RTResource) return;
-
-					TArray<FColor> PixelData;
-					FReadSurfaceDataFlags ReadPixelFlags;
-					ReadPixelFlags.SetLinearToGamma(false);
-            
-					// Lệnh đọc pixel, bây giờ an toàn hơn nhiều
-					RTResource->ReadPixels(PixelData, ReadPixelFlags);
-
-					// Gửi dữ liệu về lại Game Thread
-					AsyncTask(ENamedThreads::GameThread, [Manager = ThisWeakPtr, TX = TileX, TY = TileY, Pixels = MoveTemp(PixelData)]() mutable
-					{
-						if (Manager.IsValid())
-						{
-							Manager->OnTileCaptureCompleted(TX, TY, MoveTemp(Pixels));
-						}
-					});
-				}
-			);
-
-			// --- LOGIC Ở GAME THREAD TIẾP TỤC NGAY LẬP TỨC ---
-			// (Phần code unregister streamer và chuyển sang tile tiếp theo giữ nguyên)
-			if (UWorldPartitionSubsystem* LocalWp = World->GetSubsystem<UWorldPartitionSubsystem>())
-			{
-				if (MinimapStreamer.IsValid() && LocalWp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
-				{
-					LocalWp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
-				}
-			}
-
-			CurrentTileIndex++;
-
-			FTimerHandle NextTileDelayHandle;
-			World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile,
-			                                  0.1f, false);
+			CaptureTileWithScreenshot(); // GỌI HÀM MỚI
 		}
 	}
+}
+
+void UMinimapGeneratorManager::CaptureTileWithScreenshot()
+{
+	const int32 TileX = CurrentTileIndex % NumTilesX;
+	const int32 TileY = CurrentTileIndex / NumTilesX;
+	CurrentCaptureTilePosition = FIntPoint(TileX, TileY);
+
+	// ================== CRITICAL FIX STARTS HERE ==================
+	// Calculate the correct OrthoWidth and camera position again, just like in ProcessNextTile
+	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
+	const float WorldUnitsPerPixelX = BoundsSize.X / Settings.OutputWidth;
+	const float WorldUnitsPerPixelY = BoundsSize.Y / Settings.OutputHeight;
+
+	const float TileWorldSizeX = Settings.TileResolution * WorldUnitsPerPixelX;
+	const float TileWorldSizeY = Settings.TileResolution * WorldUnitsPerPixelY;
+	const float CameraOrthoWidth = FMath::Max(TileWorldSizeX, TileWorldSizeY);
+
+	const float StepWorldSizeX = (Settings.TileResolution - Settings.TileOverlap) * WorldUnitsPerPixelX;
+	const float StepWorldSizeY = (Settings.TileResolution - Settings.TileOverlap) * WorldUnitsPerPixelY;
+
+	const FVector BoundsMin = Settings.CaptureBounds.Min;
+	const FVector FirstTileCenter = BoundsMin + FVector(CameraOrthoWidth / 2.0f, CameraOrthoWidth / 2.0f, 0);
+
+	const FVector TileCenter = FirstTileCenter + FVector(
+		TileX * StepWorldSizeX,
+		TileY * StepWorldSizeY,
+		Settings.CameraHeight - BoundsMin.Z
+	);
+
+	if (FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->
+																							  GetActiveViewport()->
+																							  GetClient()))
+	{
+		// 1. Set viewport to Top Orthographic
+		ViewportClient->SetViewportType(ELevelViewportType::LVT_OrthoXY);
+
+		// 2. Set the camera position and rotation directly
+		ViewportClient->SetViewLocation(TileCenter);
+		ViewportClient->SetViewRotation(FRotator(-90.f, 0.f, 0.f));
+
+		// 3. THIS IS THE KEY: Set the OrthoWidth explicitly and consistently for every tile.
+		ViewportClient->SetOrthoZoom(CameraOrthoWidth * 0.5f); // SetOrthoZoom takes half of the desired OrthoWidth
+
+		// 4. Redraw the viewport with the new settings
+		ViewportClient->Invalidate();
+		GEditor->GetActiveViewport()->Draw();
+	}
+	// ================== CRITICAL FIX ENDS HERE ==================
+
+	// Request screenshot
+	FHighResScreenshotConfig& HighResScreenshotConfig = GetHighResScreenshotConfig();
+	HighResScreenshotConfig.SetResolution(Settings.TileResolution, Settings.TileResolution, 1.0f);
+	HighResScreenshotConfig.bDumpBufferVisualizationTargets = false;
+	HighResScreenshotConfig.bCaptureHDR = false;
+	FScreenshotRequest::RequestScreenshot(false);
+}
+
+void UMinimapGeneratorManager::OnScreenshotCaptured(int32 Width, int32 Height, const TArray<FColor>& PixelData)
+{
+	// Delegate đã được gọi! Dữ liệu đã sẵn sàng trên Game Thread.
+
+	// Chúng ta cần kiểm tra xem screenshot này có phải là của chúng ta không
+	// (ví dụ: kích thước có khớp không), vì đây là delegate toàn cục.
+	if (Width != Settings.TileResolution || Height != Settings.TileResolution || PixelData.Num() == 0)
+	{
+		if (Width != Settings.TileResolution)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Screenshot width mismatch. Expected: %d, Got: %d"), Settings.TileResolution,
+				   Width);
+		}
+		if (Height != Settings.TileResolution)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Screenshot height mismatch. Expected: %d, Got: %d"), Settings.TileResolution,
+				   Height);
+		}
+		if (PixelData.Num() == 0)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Screenshot pixel data is empty"));
+		}
+		return; // Bỏ qua screenshot không mong muốn
+	}
+
+	const UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
+	{
+		if (MinimapStreamer.IsValid() && Wp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
+		{
+			Wp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
+		}
+	}
+
+	OnTileCaptureCompleted(CurrentCaptureTilePosition.X, CurrentCaptureTilePosition.Y, PixelData);
+
+	CurrentTileIndex++;
+
+	FTimerHandle NextTileDelayHandle;
+	World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f,
+									  false);
 }
 
 void UMinimapGeneratorManager::OnTileCaptureCompleted(const int32 TileX, const int32 TileY, TArray<FColor> PixelData)
@@ -234,7 +273,7 @@ void UMinimapGeneratorManager::StartStitching()
 
 	const int32 TileRes = Settings.TileResolution;
 	const int32 Overlap = Settings.TileOverlap;
-	// const int32 NonOverlap = TileRes - Overlap;
+	const int32 EffectiveTileRes = TileRes - Overlap;
 
 	for (int32 TileY = 0; TileY < NumTilesY; ++TileY)
 	{
@@ -243,54 +282,55 @@ void UMinimapGeneratorManager::StartStitching()
 			const FIntPoint CurrentTilePos(TileX, TileY);
 			if (!CapturedTileData.Contains(CurrentTilePos))
 			{
-				UE_LOG(LogTemp, Error, TEXT("Missing data for tile (%d, %d)!"), TileX, TileY);
+				UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Missing data for tile (%d, %d)!"), *GetName(),
+					   *FString(__FUNCTION__), TileX, TileY);
 				continue;
 			}
 
 			const TArray<FColor>& TilePixels = CapturedTileData[CurrentTilePos];
 
-			const int32 CanvasStartX = TileX * (TileRes - Overlap);
-			const int32 CanvasStartY = TileY * (TileRes - Overlap);
+			// Calculate the top-left starting position on the final canvas for this tile.
+			const int32 CanvasStartX = TileX * EffectiveTileRes;
+			const int32 CanvasStartY = TileY * EffectiveTileRes;
 
 			for (int32 y = 0; y < TileRes; ++y)
 			{
 				for (int32 x = 0; x < TileRes; ++x)
 				{
+					// Calculate the target pixel coordinate on the final canvas.
 					const int32 CanvasX = CanvasStartX + x;
 					const int32 CanvasY = CanvasStartY + y;
 
+					// Ensure we don't write outside the bounds of the final image.
 					if (CanvasX >= FinalWidth || CanvasY >= FinalHeight) continue;
 
 					const int32 CanvasIndex = CanvasY * FinalWidth + CanvasX;
 					const int32 TileIndex = y * TileRes + x;
 
-					FColor NewPixel = TilePixels[TileIndex];
+					const FColor NewPixel = TilePixels[TileIndex];
 
-					// --- Blending Logic ---
+					// Blending logic
 					float BlendX = 1.0f;
 					float BlendY = 1.0f;
 
 					// Left overlap
-					if (TileX > 0 && x < Overlap) BlendX = static_cast<float>(x) / Overlap;
-					// Right overlap (handled by the next tile)
-
+					if (TileX > 0 && x < Overlap)
+					{
+						BlendX = static_cast<float>(x) / (Overlap - 1);
+					}
 					// Top overlap
-					if (TileY > 0 && y < Overlap) BlendY = static_cast<float>(y) / Overlap;
+					if (TileY > 0 && y < Overlap)
+					{
+						BlendY = static_cast<float>(y) / (Overlap - 1);
+					}
 
 					if (const float BlendFactor = FMath::Min(BlendX, BlendY); BlendFactor < 1.0f)
 					{
-						// CHANGED: Using LerpUsingHSV for blending
-						FColor ExistingPixel = FinalImageData[CanvasIndex];
-
-						// Convert FColor (sRGB, 0-255) to FLinearColor (Linear, 0-1)
+						const FColor ExistingPixel = FinalImageData[CanvasIndex];
 						const FLinearColor FromColor(ExistingPixel);
 						const FLinearColor ToColor(NewPixel);
-
-						// Interpolate in HSV space
 						const FLinearColor BlendedLinearColor = FLinearColor::LerpUsingHSV(
 							FromColor, ToColor, BlendFactor);
-
-						// Convert back to FColor for storage. The 'true' flag handles sRGB conversion.
 						FinalImageData[CanvasIndex] = BlendedLinearColor.ToFColor(true);
 					}
 					else
@@ -305,39 +345,28 @@ void UMinimapGeneratorManager::StartStitching()
 	// Free up memory
 	CapturedTileData.Empty();
 
-	// Save the final image to disk
 	if (SaveFinalImage(FinalImageData, FinalWidth, FinalHeight))
 	{
 		OnProgress.Broadcast(FText::FromString(TEXT("Completed! Image saved.")), 1.0f, NumTilesX * NumTilesY,
-		                     NumTilesX * NumTilesY);
+							 NumTilesX * NumTilesY);
 	}
 	else
 	{
 		OnProgress.Broadcast(FText::FromString(TEXT("Error saving final image!")), 1.0f, NumTilesX * NumTilesY,
-		                     NumTilesX * NumTilesY);
+							 NumTilesX * NumTilesY);
 	}
 }
 
 void UMinimapGeneratorManager::OnAllTasksCompleted()
 {
 	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - All tiles captured. Starting stitching process."), *GetName(),
-	       *FString(__FUNCTION__));
+		   *FString(__FUNCTION__));
 
-	if (CaptureActor)
+	if (ScreenshotCapturedDelegateHandle.IsValid())
 	{
-		CaptureActor->Destroy();
-		CaptureActor = nullptr;
+		FScreenshotRequest::OnScreenshotCaptured().Remove(ScreenshotCapturedDelegateHandle);
+		ScreenshotCapturedDelegateHandle.Reset();
 	}
-
-	const UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
-	{
-		if (MinimapStreamer.IsValid() && Wp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
-		{
-			Wp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
-		}
-	}
-	MinimapStreamer.Reset();
 
 	StartStitching();
 }
@@ -349,7 +378,7 @@ bool UMinimapGeneratorManager::SaveFinalImage(const TArray<FColor>& ImageData, i
 	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
 
 	if (!ImageWrapper.IsValid() || !ImageWrapper->SetRaw(ImageData.GetData(), ImageData.Num() * sizeof(FColor), Width,
-	                                                     Height, ERGBFormat::BGRA, 8))
+														 Height, ERGBFormat::BGRA, 8))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Failed to set raw image data for PNG wrapper."));
 		return false;

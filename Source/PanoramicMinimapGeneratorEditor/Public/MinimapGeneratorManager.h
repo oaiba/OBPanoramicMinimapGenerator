@@ -96,10 +96,10 @@ private:
 	// We'll store captured tile data here before stitching
 	TMap<FIntPoint, TArray<FColor>> CapturedTileData;
 
-	// The actor responsible for capturing the scene
-	UPROPERTY(Transient)
-	TObjectPtr<class ASceneCapture2D> CaptureActor;
+	void CaptureTileWithScreenshot();
+	void OnScreenshotCaptured(int32 Width, int32 Height, const TArray<FColor>& PixelData);
 
-	UPROPERTY(Transient)
-	TObjectPtr<class UTextureRenderTarget2D> RenderTarget;
+	FIntPoint CurrentCaptureTilePosition;
+	FDelegateHandle ScreenshotCapturedDelegateHandle;
+
 };
