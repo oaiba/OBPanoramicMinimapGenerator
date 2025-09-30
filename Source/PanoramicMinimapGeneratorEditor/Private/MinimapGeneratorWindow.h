@@ -59,6 +59,9 @@ private:
 	TSharedPtr<SCheckBox> IsOrthographicCheckbox;
 	TSharedPtr<SSpinBox<float>> CameraFOV;
 
+	// Quality Settings
+	TSharedPtr<SCheckBox> OverrideQualityCheckbox; 
+
 	// Progress Reporting
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;

@@ -22,25 +22,27 @@
 class FSaveImageTask : public FNonAbandonableTask
 {
 public: // <-- MOVED TO PUBLIC
-	FSaveImageTask(TArray<FColor> InPixelData, int32 InWidth, int32 InHeight, FString InFullPath, TWeakObjectPtr<UMinimapGeneratorManager> InManager)
+	FSaveImageTask(TArray<FColor> InPixelData, int32 InWidth, int32 InHeight, FString InFullPath,
+	               TWeakObjectPtr<UMinimapGeneratorManager> InManager)
 		: PixelData(MoveTemp(InPixelData))
-		, Width(InWidth)
-		, Height(InHeight)
-		, FullPath(MoveTemp(InFullPath))
-		, ManagerPtr(InManager)
+		  , Width(InWidth)
+		  , Height(InHeight)
+		  , FullPath(MoveTemp(InFullPath))
+		  , ManagerPtr(InManager)
 	{
 	}
 
 	// This is the work that will be done on a background thread
 	void DoWork()
 	{
-		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
-		TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
-
-		if (ImageWrapper.IsValid() && ImageWrapper->SetRaw(PixelData.GetData(), PixelData.Num() * sizeof(FColor), Width, Height, ERGBFormat::BGRA, 8))
+		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(
+			FName("ImageWrapper"));
+		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+			ImageWrapper.IsValid() && ImageWrapper->SetRaw(PixelData.GetData(), PixelData.Num() * sizeof(FColor), Width,
+			                                               Height, ERGBFormat::BGRA, 8))
 		{
 			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
-			
+
 			// After work is done, schedule a task on the Game Thread to report completion
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr, bSuccess]
 			{
@@ -62,7 +64,7 @@ public: // <-- MOVED TO PUBLIC
 			});
 		}
 	}
-	
+
 	FORCEINLINE TStatId GetStatId() const
 	{
 		RETURN_QUICK_DECLARE_CYCLE_STAT(FSaveImageTask, STATGROUP_ThreadPoolAsyncTasks);
@@ -116,6 +118,18 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 {
 	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting SINGLE capture using ASceneCapture2D (High Quality)."),
 	       *GetName(), *FString(__FUNCTION__));
+
+	// Log message now reflects the chosen quality setting
+	if (Settings.bOverrideWithHighQualitySettings)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting ASYNC capture (Forcing High Quality)."), *GetName(),
+		       *FString(__FUNCTION__));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting ASYNC capture (Using Editor Scalability Settings)."),
+		       *GetName(), *FString(__FUNCTION__));
+	}
 	Settings = InSettings;
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World)
@@ -128,7 +142,7 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
 	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
 	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
-	const FRotator CameraRotation = FRotator(-90.f, 0.f, -90.f);
+	const FRotator CameraRotation = FRotator(-90.f, 0.f, -180.f);
 
 	const float OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.
 		OutputHeight);
@@ -147,24 +161,47 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 	CaptureComponent->bCaptureEveryFrame = false;
 	CaptureComponent->bCaptureOnMovement = false;
 	// Capture in HDR to get the best lighting and color data before post-processing.
-	CaptureComponent->CaptureSource = ESceneCaptureSource::SCS_FinalColorHDR;
+	// CaptureComponent->CaptureSource = ESceneCaptureSource::SCS_FinalColorHDR;
 	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
 	CaptureComponent->TextureTarget = RenderTarget;
 
-	// === 4. CRITICAL: Enable High-Quality Post-Processing ===
-	FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
-	// --- Ambient Occlusion (for soft shadows and depth) ---
-	PPSettings.bOverride_AmbientOcclusionIntensity = true;
-	PPSettings.AmbientOcclusionIntensity = 0.5f; // Tweak this value as needed
-	PPSettings.bOverride_AmbientOcclusionQuality = true;
-	PPSettings.AmbientOcclusionQuality = 100.0f;
+	CaptureComponent->CaptureSource = Settings.bOverrideWithHighQualitySettings
+		                                  ? ESceneCaptureSource::SCS_FinalColorHDR
+		                                  : ESceneCaptureSource::SCS_FinalColorLDR;
 
-	// --- Reflections (for shiny surfaces) ---
-	PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
-	PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
-	PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
-	PPSettings.ScreenSpaceReflectionQuality = 100.0f;
+	// // === 4. CRITICAL: Enable High-Quality Post-Processing ===
+	// FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
+	// // --- Ambient Occlusion (for soft shadows and depth) ---
+	// PPSettings.bOverride_AmbientOcclusionIntensity = true;
+	// PPSettings.AmbientOcclusionIntensity = 0.5f; // Tweak this value as needed
+	// PPSettings.bOverride_AmbientOcclusionQuality = true;
+	// PPSettings.AmbientOcclusionQuality = 100.0f;
+	//
+	// // --- Reflections (for shiny surfaces) ---
+	// PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
+	// PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
+	// PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
+	// PPSettings.ScreenSpaceReflectionQuality = 100.0f;
+
+	// === NEW LOGIC: Only apply high-quality overrides if the user wants to ===
+	if (Settings.bOverrideWithHighQualitySettings)
+	{
+		// This block is now conditional. It only runs if the checkbox is ticked.
+		FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
+
+		// --- Ambient Occlusion (for soft shadows and depth) ---
+		PPSettings.bOverride_AmbientOcclusionIntensity = true;
+		PPSettings.AmbientOcclusionIntensity = 0.5f;
+		PPSettings.bOverride_AmbientOcclusionQuality = true;
+		PPSettings.AmbientOcclusionQuality = 100.0f;
+
+		// --- Reflections (for shiny surfaces) ---
+		PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
+		PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
+		PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
+		PPSettings.ScreenSpaceReflectionQuality = 100.0f;
+	}
 
 	// === 5. Perform the Capture ===
 	CaptureComponent->CaptureScene();

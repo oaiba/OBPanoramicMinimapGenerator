@@ -27,6 +27,10 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling")
 	int32 TileOverlap = 64; // in pixels
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (
+	Tooltip = "If checked, forces cinematic-quality post-processing. If unchecked (default), uses the current editor viewport scalability settings for better performance."))
+	bool bOverrideWithHighQualitySettings = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
 	float CameraHeight = 50000.f;
 

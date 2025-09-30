@@ -216,6 +216,23 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			]
 		]
 
+		// === THÊM ĐOẠN MÃ NÀY VÀO ĐÂY ===
+		// --- SECTION: QUALITY ---
+		+ SVerticalBox::Slot().AutoHeight().Padding(5, 10, 5, 5)
+		[
+			SNew(STextBlock).Text(LOCTEXT("QualityHeader", "5. Quality Settings"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(15, 5, 5, 5)
+		[
+			SAssignNew(OverrideQualityCheckbox, SCheckBox)
+			.IsChecked(ECheckBoxState::Unchecked)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("OverrideQualityLabel", "Override With High Quality Settings"))
+				.ToolTipText(LOCTEXT("OverrideQualityTooltip", "If checked, forces cinematic-quality post-processing.\nIf unchecked (default), uses the current editor viewport scalability settings for better performance."))
+			]
+		]
+		// ===================================
 
 		// --- SECTION: ACTION ---
 		+ SVerticalBox::Slot().AutoHeight().Padding(10, 20, 10, 5)
@@ -263,6 +280,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	Settings.CameraHeight = CameraHeight->GetValue();
 	Settings.bIsOrthographic = IsOrthographicCheckbox->IsChecked();
 	Settings.CameraFOV = CameraFOV->GetValue();
+	Settings.bOverrideWithHighQualitySettings = OverrideQualityCheckbox->IsChecked();
 
 	ProgressBar->SetVisibility(EVisibility::Visible);
 	StatusText->SetVisibility(EVisibility::Visible);
