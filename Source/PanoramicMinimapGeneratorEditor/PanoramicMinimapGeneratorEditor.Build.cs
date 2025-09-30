@@ -9,7 +9,8 @@ public class PanoramicMinimapGeneratorEditor : ModuleRules
         PublicDependencyModuleNames.AddRange(
             new string[]
             {
-                "Core"
+                "Core",
+                "InputCore",
             }
         );
 
@@ -27,7 +28,8 @@ public class PanoramicMinimapGeneratorEditor : ModuleRules
                 "ImageWrapper",
                 "PanoramicMinimapGeneratorRuntime",
                 "RHI",
-                "RenderCore"
+                "RenderCore",
+                "InputCore",
             }
         );
     }
