@@ -67,7 +67,9 @@ public:
 	FOnMinimapProgress OnProgress;
 
 	void OnTileCaptureCompleted(int32 TileX, int32 TileY, TArray<FColor> PixelData);
-
+	
+	// Callback function when the async save task is complete
+	void OnSaveTaskCompleted(bool bSuccess);
 private:
 	// Main steps of the process
 	void CalculateGrid();
