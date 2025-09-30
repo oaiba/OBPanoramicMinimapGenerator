@@ -11,6 +11,9 @@
 #include "MinimapStreamingSource.h"
 #include "HAL/FileManager.h"
 #include "Async/Async.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/SceneCapture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 
 void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings& InSettings)
@@ -37,70 +40,113 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 
 void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings)
 {
-	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting SINGLE capture for validation."), *GetName(), *FString(__FUNCTION__));
+	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting SINGLE capture using ASceneCapture2D (High Quality)."), *GetName(), *FString(__FUNCTION__));
 	Settings = InSettings;
-	bIsSingleCaptureMode = true; // Set the flag for our delegate handler
-
-	// Ensure delegate is registered
-	ScreenshotCapturedDelegateHandle = FScreenshotRequest::OnScreenshotCaptured().AddUObject(
-		this, &UMinimapGeneratorManager::OnScreenshotCaptured);
-
-	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
-	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
-
-	// 1. Calculate the final camera position
-	// The camera is placed at the center of the bounds, at the specified height.
-	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
-
-	// 2. Calculate the required OrthoWidth to fit the entire bounds
-	// We need to account for the aspect ratio of the output image.
-	const float OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.OutputHeight);
-	
-	// Determine if the bounds are "wider" or "taller" relative to the output aspect ratio.
-	// We take the larger of the two possible OrthoWidths to ensure everything fits.
-	const float CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
-
-	if (CameraOrthoWidth <= 0)
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World)
 	{
-		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Calculated OrthoWidth is zero or negative. Check CaptureBounds size."), *GetName(), *FString(__FUNCTION__));
+		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Cannot get World."), *GetName(), *FString(__FUNCTION__));
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("Validation Capture: Location = %s, OrthoWidth = %f"), *CameraLocation.ToString(), CameraOrthoWidth);
+	// === 1. Calculate Camera Properties (No change here) ===
+	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
+	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
+	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
+	const FRotator CameraRotation = FRotator(-90.f, 0.f, -90.f);
+	
+	const float OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.OutputHeight);
+	const float CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
 
-	if (FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient()))
+	// === 2. Create an HDR Render Target ===
+	// Use a floating-point format to support High Dynamic Range rendering for better lighting.
+	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
+	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PF_FloatRGBA, true); // Use HDR format
+	RenderTarget->UpdateResource();
+
+	// === 3. Spawn and Configure the Scene Capture Actor ===
+	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
+	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
+
+	CaptureComponent->bCaptureEveryFrame = false;
+	CaptureComponent->bCaptureOnMovement = false;
+	// Capture in HDR to get the best lighting and color data before post-processing.
+	CaptureComponent->CaptureSource = ESceneCaptureSource::SCS_SceneColorHDR;
+	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
+	CaptureComponent->OrthoWidth = CameraOrthoWidth;
+	CaptureComponent->TextureTarget = RenderTarget;
+	
+	// === 4. CRITICAL: Enable High-Quality Post-Processing ===
+	FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
+	// --- Ambient Occlusion (for soft shadows and depth) ---
+	PPSettings.bOverride_AmbientOcclusionIntensity = true;
+	PPSettings.AmbientOcclusionIntensity = 0.5f; // Tweak this value as needed
+	PPSettings.bOverride_AmbientOcclusionQuality = true;
+	PPSettings.AmbientOcclusionQuality = 100.0f;
+
+	// --- Reflections (for shiny surfaces) ---
+	PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
+	PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
+	PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
+	PPSettings.ScreenSpaceReflectionQuality = 100.0f;
+
+	// === 5. Perform the Capture ===
+	CaptureComponent->CaptureScene();
+
+	// === 6. Read Pixel Data from the Render Target ===
+	TArray<FColor> CapturedPixels;
+
+	if (FTextureRenderTargetResource* RenderTargetResource = RenderTarget->GameThread_GetRenderTargetResource())
 	{
-		ViewportClient->SetViewportType(ELevelViewportType::LVT_OrthoXY);
-		ViewportClient->SetViewLocation(CameraLocation);
-		ViewportClient->SetViewRotation(FRotator(-90.f, 0.f, 0.f));
-		// SetOrthoZoom takes half of the desired OrthoWidth
-		ViewportClient->SetOrthoZoom(CameraOrthoWidth * 0.5f); 
+		CapturedPixels.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
+		FReadSurfaceDataFlags ReadPixelFlags(RCM_UNorm);
+		// CRITICAL: Apply gamma correction to make colors look correct on a standard monitor.
+		ReadPixelFlags.SetLinearToGamma(true); 
 		
-		ViewportClient->Invalidate();
-		GEditor->GetActiveViewport()->Draw();
+		RenderTargetResource->ReadPixels(CapturedPixels, ReadPixelFlags);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Failed to get Render Target Resource."), *GetName(), *FString(__FUNCTION__));
+		CaptureActor->Destroy();
+		return;
 	}
 
-	// 3. Request the screenshot with the final desired resolution
-	FHighResScreenshotConfig& HighResScreenshotConfig = GetHighResScreenshotConfig();
-	HighResScreenshotConfig.SetResolution(Settings.OutputWidth, Settings.OutputHeight, 1.0f);
-	HighResScreenshotConfig.bDumpBufferVisualizationTargets = false;
-	HighResScreenshotConfig.bCaptureHDR = false;
-	FScreenshotRequest::RequestScreenshot(false);
+	// === 7. Clean Up & Save (No change here) ===
+	CaptureActor->Destroy();
+	RenderTarget->ReleaseResource();
+	RenderTarget = nullptr;
+
+	if (CapturedPixels.Num() > 0)
+	{
+		if (SaveFinalImage(CapturedPixels, Settings.OutputWidth, Settings.OutputHeight))
+		{
+			OnProgress.Broadcast(FText::FromString(TEXT("High Quality Capture Completed! Image saved.")), 1.0f, 1, 1);
+		}
+		else
+		{
+			OnProgress.Broadcast(FText::FromString(TEXT("Error saving high quality image!")), 1.0f, 1, 1);
+		}
+	}
 }
 
-void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int32 Height, const TArray<FColor>& PixelData)
+void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int32 Height,
+													const TArray<FColor>& PixelData)
 {
 	if (bIsSingleCaptureMode)
 	{
 		// In single capture mode, we expect the screenshot to match the final output resolution.
 		if (Width != Settings.OutputWidth || Height != Settings.OutputHeight)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("OnScreenshotCaptured: Mismatched resolution for single capture. Ignoring. Expected %dx%d, got %dx%d"), Settings.OutputWidth, Settings.OutputHeight, Width, Height);
+			UE_LOG(LogTemp, Warning,
+				   TEXT(
+					   "OnScreenshotCaptured: Mismatched resolution for single capture. Ignoring. Expected %dx%d, got %dx%d"
+				   ), Settings.OutputWidth, Settings.OutputHeight, Width, Height);
 			return;
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("Validation screenshot captured successfully. Saving image..."));
-		
+
 		// Save the image directly
 		if (SaveFinalImage(PixelData, Width, Height))
 		{
@@ -141,7 +187,8 @@ void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int
 		CurrentTileIndex++;
 
 		FTimerHandle NextTileDelayHandle;
-		World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f, false);
+		World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f,
+										  false);
 	}
 }
 
