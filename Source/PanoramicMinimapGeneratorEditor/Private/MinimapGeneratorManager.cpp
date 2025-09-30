@@ -35,6 +35,116 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	ProcessNextTile();
 }
 
+void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting SINGLE capture for validation."), *GetName(), *FString(__FUNCTION__));
+	Settings = InSettings;
+	bIsSingleCaptureMode = true; // Set the flag for our delegate handler
+
+	// Ensure delegate is registered
+	ScreenshotCapturedDelegateHandle = FScreenshotRequest::OnScreenshotCaptured().AddUObject(
+		this, &UMinimapGeneratorManager::OnScreenshotCaptured);
+
+	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
+	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
+
+	// 1. Calculate the final camera position
+	// The camera is placed at the center of the bounds, at the specified height.
+	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
+
+	// 2. Calculate the required OrthoWidth to fit the entire bounds
+	// We need to account for the aspect ratio of the output image.
+	const float OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.OutputHeight);
+	
+	// Determine if the bounds are "wider" or "taller" relative to the output aspect ratio.
+	// We take the larger of the two possible OrthoWidths to ensure everything fits.
+	const float CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
+
+	if (CameraOrthoWidth <= 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Calculated OrthoWidth is zero or negative. Check CaptureBounds size."), *GetName(), *FString(__FUNCTION__));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("Validation Capture: Location = %s, OrthoWidth = %f"), *CameraLocation.ToString(), CameraOrthoWidth);
+
+	if (FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient()))
+	{
+		ViewportClient->SetViewportType(ELevelViewportType::LVT_OrthoXY);
+		ViewportClient->SetViewLocation(CameraLocation);
+		ViewportClient->SetViewRotation(FRotator(-90.f, 0.f, 0.f));
+		// SetOrthoZoom takes half of the desired OrthoWidth
+		ViewportClient->SetOrthoZoom(CameraOrthoWidth * 0.5f); 
+		
+		ViewportClient->Invalidate();
+		GEditor->GetActiveViewport()->Draw();
+	}
+
+	// 3. Request the screenshot with the final desired resolution
+	FHighResScreenshotConfig& HighResScreenshotConfig = GetHighResScreenshotConfig();
+	HighResScreenshotConfig.SetResolution(Settings.OutputWidth, Settings.OutputHeight, 1.0f);
+	HighResScreenshotConfig.bDumpBufferVisualizationTargets = false;
+	HighResScreenshotConfig.bCaptureHDR = false;
+	FScreenshotRequest::RequestScreenshot(false);
+}
+
+void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int32 Height, const TArray<FColor>& PixelData)
+{
+	if (bIsSingleCaptureMode)
+	{
+		// In single capture mode, we expect the screenshot to match the final output resolution.
+		if (Width != Settings.OutputWidth || Height != Settings.OutputHeight)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("OnScreenshotCaptured: Mismatched resolution for single capture. Ignoring. Expected %dx%d, got %dx%d"), Settings.OutputWidth, Settings.OutputHeight, Width, Height);
+			return;
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("Validation screenshot captured successfully. Saving image..."));
+		
+		// Save the image directly
+		if (SaveFinalImage(PixelData, Width, Height))
+		{
+			OnProgress.Broadcast(FText::FromString(TEXT("Validation Completed! Image saved.")), 1.0f, 1, 1);
+		}
+		else
+		{
+			OnProgress.Broadcast(FText::FromString(TEXT("Error saving validation image!")), 1.0f, 1, 1);
+		}
+
+		// Clean up
+		if (ScreenshotCapturedDelegateHandle.IsValid())
+		{
+			FScreenshotRequest::OnScreenshotCaptured().Remove(ScreenshotCapturedDelegateHandle);
+			ScreenshotCapturedDelegateHandle.Reset();
+		}
+		bIsSingleCaptureMode = false;
+	}
+	else // Đây là logic chia ô cũ của bạn
+	{
+		// We need to check if this screenshot is for one of our tiles
+		if (Width != Settings.TileResolution || Height != Settings.TileResolution || PixelData.Num() == 0)
+		{
+			return; // Ignore unwanted screenshots
+		}
+
+		const UWorld* World = GEditor->GetEditorWorldContext().World();
+		if (UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
+		{
+			if (MinimapStreamer.IsValid() && Wp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
+			{
+				Wp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
+			}
+		}
+
+		OnTileCaptureCompleted(CurrentCaptureTilePosition.X, CurrentCaptureTilePosition.Y, PixelData);
+
+		CurrentTileIndex++;
+
+		FTimerHandle NextTileDelayHandle;
+		World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f, false);
+	}
+}
+
 void UMinimapGeneratorManager::CalculateGrid()
 {
 	// The logic should be based on pixel space, not world space, to ensure the final stitched image is correct.
@@ -201,48 +311,48 @@ void UMinimapGeneratorManager::CaptureTileWithScreenshot()
 	FScreenshotRequest::RequestScreenshot(false);
 }
 
-void UMinimapGeneratorManager::OnScreenshotCaptured(int32 Width, int32 Height, const TArray<FColor>& PixelData)
-{
-	// Delegate đã được gọi! Dữ liệu đã sẵn sàng trên Game Thread.
-
-	// Chúng ta cần kiểm tra xem screenshot này có phải là của chúng ta không
-	// (ví dụ: kích thước có khớp không), vì đây là delegate toàn cục.
-	if (Width != Settings.TileResolution || Height != Settings.TileResolution || PixelData.Num() == 0)
-	{
-		if (Width != Settings.TileResolution)
-		{
-			UE_LOG(LogTemp, Error, TEXT("Screenshot width mismatch. Expected: %d, Got: %d"), Settings.TileResolution,
-				   Width);
-		}
-		if (Height != Settings.TileResolution)
-		{
-			UE_LOG(LogTemp, Error, TEXT("Screenshot height mismatch. Expected: %d, Got: %d"), Settings.TileResolution,
-				   Height);
-		}
-		if (PixelData.Num() == 0)
-		{
-			UE_LOG(LogTemp, Error, TEXT("Screenshot pixel data is empty"));
-		}
-		return; // Bỏ qua screenshot không mong muốn
-	}
-
-	const UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
-	{
-		if (MinimapStreamer.IsValid() && Wp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
-		{
-			Wp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
-		}
-	}
-
-	OnTileCaptureCompleted(CurrentCaptureTilePosition.X, CurrentCaptureTilePosition.Y, PixelData);
-
-	CurrentTileIndex++;
-
-	FTimerHandle NextTileDelayHandle;
-	World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f,
-									  false);
-}
+// void UMinimapGeneratorManager::OnScreenshotCaptured(int32 Width, int32 Height, const TArray<FColor>& PixelData)
+// {
+// 	// Delegate đã được gọi! Dữ liệu đã sẵn sàng trên Game Thread.
+//
+// 	// Chúng ta cần kiểm tra xem screenshot này có phải là của chúng ta không
+// 	// (ví dụ: kích thước có khớp không), vì đây là delegate toàn cục.
+// 	if (Width != Settings.TileResolution || Height != Settings.TileResolution || PixelData.Num() == 0)
+// 	{
+// 		if (Width != Settings.TileResolution)
+// 		{
+// 			UE_LOG(LogTemp, Error, TEXT("Screenshot width mismatch. Expected: %d, Got: %d"), Settings.TileResolution,
+// 				   Width);
+// 		}
+// 		if (Height != Settings.TileResolution)
+// 		{
+// 			UE_LOG(LogTemp, Error, TEXT("Screenshot height mismatch. Expected: %d, Got: %d"), Settings.TileResolution,
+// 				   Height);
+// 		}
+// 		if (PixelData.Num() == 0)
+// 		{
+// 			UE_LOG(LogTemp, Error, TEXT("Screenshot pixel data is empty"));
+// 		}
+// 		return; // Bỏ qua screenshot không mong muốn
+// 	}
+//
+// 	const UWorld* World = GEditor->GetEditorWorldContext().World();
+// 	if (UWorldPartitionSubsystem* Wp = World->GetSubsystem<UWorldPartitionSubsystem>())
+// 	{
+// 		if (MinimapStreamer.IsValid() && Wp->IsStreamingSourceProviderRegistered(MinimapStreamer.Get()))
+// 		{
+// 			Wp->UnregisterStreamingSourceProvider(MinimapStreamer.Get());
+// 		}
+// 	}
+//
+// 	OnTileCaptureCompleted(CurrentCaptureTilePosition.X, CurrentCaptureTilePosition.Y, PixelData);
+//
+// 	CurrentTileIndex++;
+//
+// 	FTimerHandle NextTileDelayHandle;
+// 	World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f,
+// 									  false);
+// }
 
 void UMinimapGeneratorManager::OnTileCaptureCompleted(const int32 TileX, const int32 TileY, TArray<FColor> PixelData)
 {

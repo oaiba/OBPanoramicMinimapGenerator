@@ -268,7 +268,8 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	StatusText->SetVisibility(EVisibility::Visible);
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);
 
-	Manager->StartCaptureProcess(Settings);
+	// Manager->StartCaptureProcess(Settings);
+	Manager->StartSingleCaptureForValidation(Settings);
 
 	return FReply::Handled();
 }

@@ -60,6 +60,7 @@ class PANORAMICMINIMAPGENERATOREDITOR_API UMinimapGeneratorManager : public UObj
 public:
 	// Starts the entire capture and stitching process
 	void StartCaptureProcess(const FMinimapCaptureSettings& InSettings);
+	void StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings);
 
 	// Delegate for UI updates
 	// UPROPERTY()
@@ -101,5 +102,7 @@ private:
 
 	FIntPoint CurrentCaptureTilePosition;
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
+
+	bool bIsSingleCaptureMode = false;
 
 };
