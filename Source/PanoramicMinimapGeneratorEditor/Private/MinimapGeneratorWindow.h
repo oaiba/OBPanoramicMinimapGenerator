@@ -62,7 +62,25 @@ private:
 
 	// Quality Settings
 	TSharedPtr<SCheckBox> OverrideQualityCheckbox; 
+	// === THÊM CÁC WIDGET VÀ HÀM MỚI ===
+	// Con trỏ tới các widget cài đặt chi tiết
+	TSharedPtr<SSpinBox<float>> AOIntensitySpinBox;
+	TSharedPtr<SSpinBox<float>> AOQualitySpinBox;
+	TSharedPtr<SSpinBox<float>> SSRIntensitySpinBox;
+	TSharedPtr<SSpinBox<float>> SSRQualitySpinBox;
+	TSharedPtr<SComboBox<TSharedPtr<FString>>> CaptureSourceComboBox;
 
+	// Dữ liệu cho ComboBox
+	TArray<TSharedPtr<FString>> CaptureSourceOptions;
+	TSharedPtr<FString> CurrentCaptureSource;
+
+	// Hàm delegate cho ComboBox
+	void OnCaptureSourceChanged(TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo);
+
+	// Hàm quyết định việc hiển thị các cài đặt override
+	EVisibility GetOverrideSettingsVisibility() const;
+	// ===================================
+	
 	// Progress Reporting
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;

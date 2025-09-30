@@ -143,6 +143,39 @@ UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
 	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PF_FloatRGBA, true);
 	return RenderTarget;
+
+	// // Mặc định là LDR
+	// EPixelFormat PixelFormat = PF_FloatRGBA;
+	// FString FormatLog = TEXT("HDR");
+	//
+	// if (Settings.bOverrideWithHighQualitySettings)
+	// {
+	// 	// Một số Capture Source yêu cầu HDR
+	// 	switch (Settings.CaptureSource)
+	// 	{
+	// 	case SCS_SceneColorHDR:
+	// 	case SCS_FinalColorHDR:
+	// 	case SCS_FinalToneCurveHDR:
+	// 		PixelFormat = PF_FloatRGBA;
+	// 		FormatLog = TEXT("HDR");
+	// 		break;
+	// 	default:
+	// 		break;
+	// 	}
+	// }
+	//
+	// if (PixelFormat == PF_FloatRGBA)
+	// {
+	// 	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PixelFormat, true);
+	// }
+	// else
+	// {
+	// 	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PixelFormat, true);
+	// }
+	//
+	// UE_LOG(LogTemp, Log, TEXT("Created %s Render Target (%dx%d)."), *FormatLog, Settings.OutputWidth,
+	//        Settings.OutputHeight);
+	// return RenderTarget;
 }
 
 ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget) const
@@ -164,19 +197,25 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	CaptureComponent->TextureTarget = RenderTarget;
 	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
-	CaptureComponent->CaptureSource = Settings.bOverrideWithHighQualitySettings ? SCS_FinalColorHDR : SCS_FinalColorLDR;
 
 	if (Settings.bOverrideWithHighQualitySettings)
 	{
+		CaptureComponent->CaptureSource = Settings.CaptureSource;
+
 		FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
 		PPSettings.bOverride_AmbientOcclusionIntensity = true;
-		PPSettings.AmbientOcclusionIntensity = 0.5f;
+		PPSettings.AmbientOcclusionIntensity = Settings.AmbientOcclusionIntensity;
 		PPSettings.bOverride_AmbientOcclusionQuality = true;
-		PPSettings.AmbientOcclusionQuality = 100.0f;
+		PPSettings.AmbientOcclusionQuality = Settings.AmbientOcclusionQuality;
 		PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
-		PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
+		PPSettings.ScreenSpaceReflectionIntensity = Settings.ScreenSpaceReflectionIntensity;
 		PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
-		PPSettings.ScreenSpaceReflectionQuality = 100.0f;
+		PPSettings.ScreenSpaceReflectionQuality = Settings.ScreenSpaceReflectionQuality;
+	}
+	else
+	{
+		// Giữ nguyên logic cũ khi không override
+		CaptureComponent->CaptureSource = SCS_FinalColorLDR;
 	}
 
 	return CaptureActor;

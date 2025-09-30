@@ -18,6 +18,7 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Layout/SExpandableArea.h"
 
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 {
@@ -30,6 +31,16 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 	// Khai báo một biến để dễ dàng tái sử dụng padding cho các nhãn
 	const FMargin LabelPadding(5, 5, 10, 5);
 
+	if (const UEnum* CaptureSourceEnum = StaticEnum<ESceneCaptureSource>())
+	{
+		for (int32 i = 0; i < CaptureSourceEnum->NumEnums() - 1; ++i) // -1 để bỏ qua giá trị MAX
+		{
+			CaptureSourceOptions.Add(MakeShared<FString>(CaptureSourceEnum->GetDisplayNameTextByIndex(i).ToString()));
+		}
+		// Đặt giá trị mặc định
+		CurrentCaptureSource = CaptureSourceOptions[0]; // SCS_FinalColorHDR
+	}
+
 	ChildSlot
 	[
 		// Wrap everything in a ScrollBox to handle vertical overflow
@@ -38,7 +49,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 		[
 			SNew(SVerticalBox)
 
-			// Main layout is now a GridPanel for clean, two-column alignment
+			// The main layout is now a GridPanel for clean, two-column alignment
 			+ SVerticalBox::Slot()
 			.Padding(10)
 			[
@@ -234,6 +245,93 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						SNew(STextBlock).Text(LOCTEXT("OverrideQualityLabel", "Override With High Quality Settings"))
 					]
 				]
+				// === THÊM KHỐI UI ĐỘNG MỚI ===
+				+ SGridPanel::Slot(0, 19).ColumnSpan(2).Padding(20, 5, 5, 5)
+				[
+					SNew(SVerticalBox)
+					.Visibility(this, &SMinimapGeneratorWindow::GetOverrideSettingsVisibility)
+					// <<-- ĐIỀU KHIỂN HIỂN THỊ
+
+					// Capture Source
+					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("CaptureSourceLabel", "Capture Source"))
+						]
+						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						[
+							SAssignNew(CaptureSourceComboBox, SComboBox<TSharedPtr<FString>>)
+							.OptionsSource(&CaptureSourceOptions)
+							.OnSelectionChanged(this, &SMinimapGeneratorWindow::OnCaptureSourceChanged)
+							.OnGenerateWidget_Lambda([](TSharedPtr<FString> InOption)
+							{
+								return SNew(STextBlock).Text(FText::FromString(*InOption));
+							})
+							[
+								SNew(STextBlock).Text_Lambda(
+									[this] { return FText::FromString(*CurrentCaptureSource); })
+							]
+						]
+					]
+					// Ambient Occlusion Intensity
+					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("AOIntensityLabel", "AO Intensity"))
+						]
+						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						[
+							SAssignNew(AOIntensitySpinBox, SSpinBox<float>)
+							.MinValue(0.f)
+							.MaxValue(1.f)
+							.Value(0.5f)
+							.Delta(0.05f)
+						]
+					]
+					// Ambient Occlusion Quality
+					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("AOQualityLabel", "AO Quality"))
+						]
+						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						[
+							SAssignNew(AOQualitySpinBox, SSpinBox<float>).MinValue(0.f).MaxValue(100.f).Value(100.f)
+						]
+					]
+					// Screen Space Reflection Intensity
+					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("SSRIntensityLabel", "SSR Intensity"))
+						]
+						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						[
+							SAssignNew(SSRIntensitySpinBox, SSpinBox<float>).MinValue(0.f).MaxValue(100.f).Value(100.f)
+						]
+					]
+					// Screen Space Reflection Quality
+					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("SSRQualityLabel", "SSR Quality"))
+						]
+						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						[
+							SAssignNew(SSRQualitySpinBox, SSpinBox<float>).MinValue(0.f).MaxValue(100.f).Value(100.f)
+						]
+					]
+				]
 			]
 
 			// --- SECTION: ACTION & PROGRESS ---
@@ -255,6 +353,19 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			]
 		]
 	];
+}
+
+EVisibility SMinimapGeneratorWindow::GetOverrideSettingsVisibility() const
+{
+	return OverrideQualityCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+void SMinimapGeneratorWindow::OnCaptureSourceChanged(TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo)
+{
+	if (NewSelection.IsValid())
+	{
+		CurrentCaptureSource = NewSelection;
+	}
 }
 
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
@@ -280,7 +391,21 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	Settings.bIsOrthographic = IsOrthographicCheckbox->IsChecked();
 	Settings.CameraFOV = CameraFOV->GetValue();
 	Settings.bOverrideWithHighQualitySettings = OverrideQualityCheckbox->IsChecked();
+	if (Settings.bOverrideWithHighQualitySettings)
+	{
+		if (const UEnum* EnumPtr = StaticEnum<ESceneCaptureSource>(); EnumPtr && CurrentCaptureSource.IsValid())
+		{
+			if (const int64 EnumValue = EnumPtr->GetValueByNameString(*CurrentCaptureSource); EnumValue != INDEX_NONE)
+			{
+				Settings.CaptureSource = static_cast<ESceneCaptureSource>(EnumValue);
+			}
+		}
 
+		Settings.AmbientOcclusionIntensity = AOIntensitySpinBox->GetValue();
+		Settings.AmbientOcclusionQuality = AOQualitySpinBox->GetValue();
+		Settings.ScreenSpaceReflectionIntensity = SSRIntensitySpinBox->GetValue();
+		Settings.ScreenSpaceReflectionQuality = SSRQualitySpinBox->GetValue();
+	}
 	ProgressBar->SetVisibility(EVisibility::Visible);
 	StatusText->SetVisibility(EVisibility::Visible);
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);

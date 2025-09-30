@@ -32,6 +32,22 @@ struct FMinimapCaptureSettings
 	Tooltip = "If checked, forces cinematic-quality post-processing. If unchecked (default), uses the current editor viewport scalability settings for better performance."))
 	bool bOverrideWithHighQualitySettings = false;
 
+	// === CÁC THUỘC TÍNH MỚI CHO OVERRIDE ===
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (EditCondition = "bOverrideWithHighQualitySettings"))
+	TEnumAsByte<ESceneCaptureSource> CaptureSource = SCS_FinalColorHDR;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (UIMin = "0.0", UIMax = "1.0", EditCondition = "bOverrideWithHighQualitySettings"))
+	float AmbientOcclusionIntensity = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (UIMin = "0.0", UIMax = "100.0", EditCondition = "bOverrideWithHighQualitySettings"))
+	float AmbientOcclusionQuality = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (UIMin = "0.0", UIMax = "100.0", EditCondition = "bOverrideWithHighQualitySettings"))
+	float ScreenSpaceReflectionIntensity = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (UIMin = "0.0", UIMax = "100.0", EditCondition = "bOverrideWithHighQualitySettings"))
+	float ScreenSpaceReflectionQuality = 100.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
 	float CameraHeight = 50000.f;
 
