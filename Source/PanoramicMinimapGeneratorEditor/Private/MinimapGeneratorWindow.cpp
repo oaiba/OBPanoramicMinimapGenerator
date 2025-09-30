@@ -77,7 +77,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(5)
-		.HAlign(HAlign_Right) 
+		.HAlign(HAlign_Right)
 		[
 			SNew(SButton)
 			.Text(LOCTEXT("GetBoundsButton", "Get Bounds from Selected Actor"))
@@ -143,6 +143,18 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			+ SHorizontalBox::Slot().FillWidth(0.5f)
 			[
 				SAssignNew(FileName, SEditableTextBox).Text(LOCTEXT("DefaultFileName", "Minimap_Result"))
+			]
+		]
+		// Auto FileName Checkbox
+		+ SVerticalBox::Slot().AutoHeight().Padding(15, 5, 5, 5)
+		[
+			SAssignNew(AutoFilenameCheckbox, SCheckBox)
+			.IsChecked(ECheckBoxState::Checked)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("AutoFilenameLabel", "Auto-Generate Filename with Timestamp"))
+				.ToolTipText(LOCTEXT("AutoFilenameTooltip",
+				                     "If checked, appends a timestamp (_DD_MM_HH_mm) to the filename."))
 			]
 		]
 
@@ -229,7 +241,8 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			[
 				SNew(STextBlock)
 				.Text(LOCTEXT("OverrideQualityLabel", "Override With High Quality Settings"))
-				.ToolTipText(LOCTEXT("OverrideQualityTooltip", "If checked, forces cinematic-quality post-processing.\nIf unchecked (default), uses the current editor viewport scalability settings for better performance."))
+				.ToolTipText(LOCTEXT("OverrideQualityTooltip",
+				                     "If checked, forces cinematic-quality post-processing.\nIf unchecked (default), uses the current editor viewport scalability settings for better performance."))
 			]
 		]
 		// ===================================
@@ -275,6 +288,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	Settings.OutputHeight = OutputHeight->GetValue();
 	Settings.OutputPath = OutputPath->GetText().ToString();
 	Settings.FileName = FileName->GetText().ToString();
+	Settings.bUseAutoFilename = AutoFilenameCheckbox->IsChecked();
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
 	Settings.CameraHeight = CameraHeight->GetValue();
@@ -318,61 +332,61 @@ FReply SMinimapGeneratorWindow::OnBrowseButtonClicked()
 
 FReply SMinimapGeneratorWindow::OnGetBoundsFromSelectionClicked()
 {
-    if (!GEditor)
-    {
-        return FReply::Handled();
-    }
+	if (!GEditor)
+	{
+		return FReply::Handled();
+	}
 
-    USelection* SelectedActors = GEditor->GetSelectedActors();
-    TArray<AActor*> Actors;
-    SelectedActors->GetSelectedObjects<AActor>(Actors);
+	USelection* SelectedActors = GEditor->GetSelectedActors();
+	TArray<AActor*> Actors;
+	SelectedActors->GetSelectedObjects<AActor>(Actors);
 
-    if (Actors.Num() > 0)
-    {
-        // BẮT ĐẦU LOGIC NÂNG CẤP
-        // 1. Tạo một FBox không hợp lệ để bắt đầu
-        FBox CombinedBounds(ForceInit);
+	if (Actors.Num() > 0)
+	{
+		// BẮT ĐẦU LOGIC NÂNG CẤP
+		// 1. Tạo một FBox không hợp lệ để bắt đầu
+		FBox CombinedBounds(ForceInit);
 
-        // 2. Lặp qua tất cả các actor đã chọn
-        for (AActor* SelectedActor : Actors)
-        {
-            if (SelectedActor)
-            {
-                // SỬA LỖI: Sử dụng hàm GetComponentsBoundingBox chính xác
-                // Tham số 'true' đầu tiên để bao gồm cả các component không có va chạm (visuals)
-                // Tham số 'true' thứ hai để bao gồm cả các Child Actor Component
-                const FBox ActorBounds = SelectedActor->GetComponentsBoundingBox(true, true);
+		// 2. Lặp qua tất cả các actor đã chọn
+		for (AActor* SelectedActor : Actors)
+		{
+			if (SelectedActor)
+			{
+				// SỬA LỖI: Sử dụng hàm GetComponentsBoundingBox chính xác
+				// Tham số 'true' đầu tiên để bao gồm cả các component không có va chạm (visuals)
+				// Tham số 'true' thứ hai để bao gồm cả các Child Actor Component
+				const FBox ActorBounds = SelectedActor->GetComponentsBoundingBox(true, true);
 
-                // Thêm bounds của actor này vào bounds tổng hợp
-                CombinedBounds += ActorBounds;
-            }
-        }
+				// Thêm bounds của actor này vào bounds tổng hợp
+				CombinedBounds += ActorBounds;
+			}
+		}
 
-        // 3. Kiểm tra xem bounds tổng hợp có hợp lệ không (ví dụ: nếu actor không có component nào)
-        if (CombinedBounds.IsValid)
-        {
-            // Cập nhật giá trị cho các ô SSpinBox trên UI
-            BoundsMinX->SetValue(CombinedBounds.Min.X);
-            BoundsMinY->SetValue(CombinedBounds.Min.Y);
-            BoundsMinZ->SetValue(CombinedBounds.Min.Z);
+		// 3. Kiểm tra xem bounds tổng hợp có hợp lệ không (ví dụ: nếu actor không có component nào)
+		if (CombinedBounds.IsValid)
+		{
+			// Cập nhật giá trị cho các ô SSpinBox trên UI
+			BoundsMinX->SetValue(CombinedBounds.Min.X);
+			BoundsMinY->SetValue(CombinedBounds.Min.Y);
+			BoundsMinZ->SetValue(CombinedBounds.Min.Z);
 
-            BoundsMaxX->SetValue(CombinedBounds.Max.X);
-            BoundsMaxY->SetValue(CombinedBounds.Max.Y);
-            BoundsMaxZ->SetValue(CombinedBounds.Max.Z);
-            
-            UE_LOG(LogTemp, Log, TEXT("Updated bounds from %d selected actor(s)."), Actors.Num());
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("Selected actor(s) do not have valid bounds."));
-        }
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("No actors selected to get bounds from."));
-    }
+			BoundsMaxX->SetValue(CombinedBounds.Max.X);
+			BoundsMaxY->SetValue(CombinedBounds.Max.Y);
+			BoundsMaxZ->SetValue(CombinedBounds.Max.Z);
 
-    return FReply::Handled();
+			UE_LOG(LogTemp, Log, TEXT("Updated bounds from %d selected actor(s)."), Actors.Num());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Selected actor(s) do not have valid bounds."));
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No actors selected to get bounds from."));
+	}
+
+	return FReply::Handled();
 }
 
 bool SMinimapGeneratorWindow::IsPerspectiveMode() const

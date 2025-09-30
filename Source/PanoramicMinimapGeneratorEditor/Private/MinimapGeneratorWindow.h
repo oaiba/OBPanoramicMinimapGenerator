@@ -49,6 +49,7 @@ private:
 	TSharedPtr<SSpinBox<int32>> OutputHeight;
 	TSharedPtr<SEditableTextBox> OutputPath;
 	TSharedPtr<SEditableTextBox> FileName;
+	TSharedPtr<SCheckBox> AutoFilenameCheckbox;
 
 	// Tiling Settings
 	TSharedPtr<SSpinBox<int32>> TileResolution;

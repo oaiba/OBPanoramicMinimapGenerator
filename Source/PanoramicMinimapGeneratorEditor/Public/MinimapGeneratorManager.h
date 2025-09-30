@@ -45,6 +45,10 @@ struct FMinimapCaptureSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
 	FString FileName = "Minimap_Result";
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output", meta = (
+	Tooltip = "If checked, automatically appends a timestamp (_DD_MM_HH_mm) to the filename."))
+	bool bUseAutoFilename = true;
 };
 
 class FMinimapStreamingSourceProvider;

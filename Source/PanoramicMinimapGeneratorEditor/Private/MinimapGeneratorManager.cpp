@@ -166,23 +166,7 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
 	CaptureComponent->TextureTarget = RenderTarget;
 
-	CaptureComponent->CaptureSource = Settings.bOverrideWithHighQualitySettings
-		                                  ? ESceneCaptureSource::SCS_FinalColorHDR
-		                                  : ESceneCaptureSource::SCS_FinalColorLDR;
-
-	// // === 4. CRITICAL: Enable High-Quality Post-Processing ===
-	// FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
-	// // --- Ambient Occlusion (for soft shadows and depth) ---
-	// PPSettings.bOverride_AmbientOcclusionIntensity = true;
-	// PPSettings.AmbientOcclusionIntensity = 0.5f; // Tweak this value as needed
-	// PPSettings.bOverride_AmbientOcclusionQuality = true;
-	// PPSettings.AmbientOcclusionQuality = 100.0f;
-	//
-	// // --- Reflections (for shiny surfaces) ---
-	// PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
-	// PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
-	// PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
-	// PPSettings.ScreenSpaceReflectionQuality = 100.0f;
+	CaptureComponent->CaptureSource = Settings.bOverrideWithHighQualitySettings ? SCS_FinalColorHDR : SCS_FinalColorLDR;
 
 	// === NEW LOGIC: Only apply high-quality overrides if the user wants to ===
 	if (Settings.bOverrideWithHighQualitySettings)
@@ -229,8 +213,20 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 
 		if (CapturedPixels.Num() > 0)
 		{
-			// Offload the expensive saving operation to a background thread
-			FString FullPath = FPaths::Combine(Settings.OutputPath, Settings.FileName + ".png");
+			FString FinalFileName = Settings.FileName;
+			if (Settings.bUseAutoFilename)
+			{
+				const FDateTime Now = FDateTime::Now();
+				const FString Timestamp = Now.ToString(TEXT("_%Y%m%d_%H%M%S"));
+
+				FinalFileName += Timestamp;
+			}
+			// Thêm đuôi file
+			FinalFileName += TEXT(".png");
+
+			const FString FullPath = FPaths::Combine(Settings.OutputPath, FinalFileName);
+
+			// Gửi đường dẫn đã xử lý tới AsyncTask
 			(new FAutoDeleteAsyncTask<FSaveImageTask>(CapturedPixels, Settings.OutputWidth, Settings.OutputHeight,
 			                                          FullPath, this))->StartBackgroundTask();
 		}
