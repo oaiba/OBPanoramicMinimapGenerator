@@ -22,8 +22,8 @@
 class FSaveImageTask : public FNonAbandonableTask
 {
 public: // <-- MOVED TO PUBLIC
-	FSaveImageTask(TArray<FColor> InPixelData, int32 InWidth, int32 InHeight, FString InFullPath,
-	               TWeakObjectPtr<UMinimapGeneratorManager> InManager)
+	FSaveImageTask(TArray<FColor> InPixelData, const int32 InWidth, const int32 InHeight, FString InFullPath,
+	               const TWeakObjectPtr<UMinimapGeneratorManager> InManager)
 		: PixelData(MoveTemp(InPixelData))
 		  , Width(InWidth)
 		  , Height(InHeight)
@@ -46,7 +46,7 @@ public: // <-- MOVED TO PUBLIC
 			// After work is done, schedule a task on the Game Thread to report completion
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr, bSuccess]
 			{
-				if (UMinimapGeneratorManager* Manager = ManagerPtr.Get())
+				if (const UMinimapGeneratorManager* Manager = ManagerPtr.Get())
 				{
 					Manager->OnSaveTaskCompleted(bSuccess);
 				}
@@ -57,7 +57,7 @@ public: // <-- MOVED TO PUBLIC
 			// Also report failure back to the Game Thread
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr]
 			{
-				if (UMinimapGeneratorManager* Manager = ManagerPtr.Get())
+				if (const UMinimapGeneratorManager* Manager = ManagerPtr.Get())
 				{
 					Manager->OnSaveTaskCompleted(false);
 				}
@@ -100,7 +100,7 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	ProcessNextTile();
 }
 
-void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess)
+void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess) const
 {
 	if (bSuccess)
 	{
@@ -116,20 +116,6 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess)
 
 void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings)
 {
-	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting SINGLE capture using ASceneCapture2D (High Quality)."),
-	       *GetName(), *FString(__FUNCTION__));
-
-	// Log message now reflects the chosen quality setting
-	if (Settings.bOverrideWithHighQualitySettings)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting ASYNC capture (Forcing High Quality)."), *GetName(),
-		       *FString(__FUNCTION__));
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting ASYNC capture (Using Editor Scalability Settings)."),
-		       *GetName(), *FString(__FUNCTION__));
-	}
 	Settings = InSettings;
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World)
@@ -138,104 +124,116 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 		return;
 	}
 
-	// === 1. Calculate Camera Properties (No change here) ===
+	// Bước 1: Tạo "tấm canvas" để vẽ
+	ActiveRenderTarget = CreateRenderTarget();
+	if (!ActiveRenderTarget.IsValid()) return;
+
+	// Bước 2: Tạo và cấu hình "camera"
+	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
+	if (!ActiveCaptureActor.IsValid()) return;
+
+	// Bước 3: Ra lệnh chụp và đặt hẹn giờ để xử lý kết quả
+	ActiveCaptureActor->GetCaptureComponent2D()->CaptureScene();
+
+	World->GetTimerManager().SetTimerForNextTick(this, &UMinimapGeneratorManager::ReadPixelsAndFinalize);
+}
+
+UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
+{
+	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
+	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PF_FloatRGBA, true);
+	return RenderTarget;
+}
+
+ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget) const
+{
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World || !RenderTarget) return nullptr;
+
 	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
 	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
 	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
 	const FRotator CameraRotation = FRotator(-90.f, 0.f, -180.f);
-
 	const float OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.
 		OutputHeight);
 	const float CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
 
-	// === 2. Create an HDR Render Target ===
-	// Use a floating-point format to support High Dynamic Range rendering for better lighting.
-	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
-	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PF_FloatRGBA, true); // Use HDR format
-	RenderTarget->UpdateResource();
-
-	// === 3. Spawn and Configure the Scene Capture Actor ===
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
 
-	CaptureComponent->bCaptureEveryFrame = false;
-	CaptureComponent->bCaptureOnMovement = false;
-	// Capture in HDR to get the best lighting and color data before post-processing.
-	// CaptureComponent->CaptureSource = ESceneCaptureSource::SCS_FinalColorHDR;
+	CaptureComponent->TextureTarget = RenderTarget;
 	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
-	CaptureComponent->TextureTarget = RenderTarget;
-
 	CaptureComponent->CaptureSource = Settings.bOverrideWithHighQualitySettings ? SCS_FinalColorHDR : SCS_FinalColorLDR;
 
-	// === NEW LOGIC: Only apply high-quality overrides if the user wants to ===
 	if (Settings.bOverrideWithHighQualitySettings)
 	{
-		// This block is now conditional. It only runs if the checkbox is ticked.
 		FPostProcessSettings& PPSettings = CaptureComponent->PostProcessSettings;
-
-		// --- Ambient Occlusion (for soft shadows and depth) ---
 		PPSettings.bOverride_AmbientOcclusionIntensity = true;
 		PPSettings.AmbientOcclusionIntensity = 0.5f;
 		PPSettings.bOverride_AmbientOcclusionQuality = true;
 		PPSettings.AmbientOcclusionQuality = 100.0f;
-
-		// --- Reflections (for shiny surfaces) ---
 		PPSettings.bOverride_ScreenSpaceReflectionIntensity = true;
 		PPSettings.ScreenSpaceReflectionIntensity = 100.0f;
 		PPSettings.bOverride_ScreenSpaceReflectionQuality = true;
 		PPSettings.ScreenSpaceReflectionQuality = 100.0f;
 	}
 
-	// === 5. Perform the Capture ===
-	CaptureComponent->CaptureScene();
+	return CaptureActor;
+}
 
-	// Create a latent command to read pixels back on the next tick.
-	// This gives the GPU one frame to process the capture command.
-	FTimerHandle TempHandle;
-	World->GetTimerManager().SetTimer(TempHandle, [this, RenderTarget, CaptureActor]()
+void UMinimapGeneratorManager::ReadPixelsAndFinalize()
+{
+	// Lấy lại các đối tượng từ Weak Pointers
+	ASceneCapture2D* CaptureActor = ActiveCaptureActor.Get();
+	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
+
+	if (!CaptureActor || !RenderTarget)
 	{
-		TArray<FColor> CapturedPixels;
-		if (FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource())
-		{
-			// This ReadPixels will still cause a small hitch, but it's now decoupled
-			// from the much slower save operation.
-			FReadSurfaceDataFlags ReadPixelFlags(RCM_UNorm);
-			ReadPixelFlags.SetLinearToGamma(true);
-			RTResource->ReadPixels(CapturedPixels, ReadPixelFlags);
-		}
+		UE_LOG(LogTemp, Error, TEXT("Capture Actor or Render Target became invalid before pixels could be read."));
+		OnSaveTaskCompleted(false);
+		return;
+	}
 
-		// Clean up the actor immediately
-		if (CaptureActor)
-		{
-			CaptureActor->Destroy();
-		}
+	TArray<FColor> CapturedPixels;
+	if (FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource())
+	{
+		FReadSurfaceDataFlags ReadPixelFlags(RCM_UNorm);
+		ReadPixelFlags.SetLinearToGamma(true);
+		RTResource->ReadPixels(CapturedPixels, ReadPixelFlags);
+	}
 
-		if (CapturedPixels.Num() > 0)
-		{
-			FString FinalFileName = Settings.FileName;
-			if (Settings.bUseAutoFilename)
-			{
-				const FDateTime Now = FDateTime::Now();
-				const FString Timestamp = Now.ToString(TEXT("_%Y%m%d_%H%M%S"));
+	// Dọn dẹp ngay lập tức
+	CaptureActor->Destroy();
+	ActiveCaptureActor.Reset();
+	ActiveRenderTarget.Reset();
 
-				FinalFileName += Timestamp;
-			}
-			// Thêm đuôi file
-			FinalFileName += TEXT(".png");
+	if (CapturedPixels.Num() > 0)
+	{
+		StartImageSaveTask(MoveTemp(CapturedPixels));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to read pixels from Render Target."));
+		OnSaveTaskCompleted(false);
+	}
+}
 
-			const FString FullPath = FPaths::Combine(Settings.OutputPath, FinalFileName);
+void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData)
+{
+	FString FinalFileName = Settings.FileName;
+	if (Settings.bUseAutoFilename)
+	{
+		const FDateTime Now = FDateTime::Now();
+		const FString Timestamp = Now.ToString(TEXT("_%Y%m%d_%H%M%S"));
+		FinalFileName += Timestamp;
+	}
+	FinalFileName += TEXT(".png");
 
-			// Gửi đường dẫn đã xử lý tới AsyncTask
-			(new FAutoDeleteAsyncTask<FSaveImageTask>(CapturedPixels, Settings.OutputWidth, Settings.OutputHeight,
-			                                          FullPath, this))->StartBackgroundTask();
-		}
-		else
-		{
-			UE_LOG(LogTemp, Error, TEXT("Failed to read pixels from Render Target."));
-			OnSaveTaskCompleted(false);
-		}
-	}, 0.033f, false); // Delay for ~1-2 frames
+	const FString FullPath = FPaths::Combine(Settings.OutputPath, FinalFileName);
+
+	(new FAutoDeleteAsyncTask<FSaveImageTask>(MoveTemp(PixelData), Settings.OutputWidth, Settings.OutputHeight,
+	                                          FullPath, this))->StartBackgroundTask();
 }
 
 void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int32 Height,

@@ -10,7 +10,7 @@ public class PanoramicMinimapGeneratorEditor : ModuleRules
             new string[]
             {
                 "Core",
-                "InputCore",
+                "InputCore", "Engine",
             }
         );
 

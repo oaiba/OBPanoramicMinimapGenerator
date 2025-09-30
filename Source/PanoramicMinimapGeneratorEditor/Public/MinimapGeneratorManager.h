@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/SceneCapture2D.h"
 #include "UObject/Object.h"
 #include "MinimapGeneratorManager.generated.h"
 
@@ -77,7 +78,7 @@ public:
 	void OnTileCaptureCompleted(int32 TileX, int32 TileY, TArray<FColor> PixelData);
 	
 	// Callback function when the async save task is complete
-	void OnSaveTaskCompleted(bool bSuccess);
+	void OnSaveTaskCompleted(bool bSuccess) const;
 private:
 	// Main steps of the process
 	void CalculateGrid();
@@ -85,6 +86,19 @@ private:
 	void OnAllTasksCompleted();
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
+
+	// === CÁC HÀM HELPER MỚI CHO VIỆC CHỤP ẢNH ĐƠN LẺ ===
+	/** Tạo và cấu hình Render Target để vẽ vào. */
+	UTextureRenderTarget2D* CreateRenderTarget() const;
+
+	/** Tạo, cấu hình và định vị Scene Capture Actor. */
+	ASceneCapture2D* SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget) const;
+
+	/** Được gọi bởi Timer để đọc pixel, dọn dẹp và bắt đầu lưu. */
+	void ReadPixelsAndFinalize();
+
+	/** Tạo tên file cuối cùng và khởi động AsyncTask để lưu ảnh. */
+	void StartImageSaveTask(TArray<FColor> PixelData);
 
 	// The main function to drive the process
 	void ProcessNextTile();
@@ -114,5 +128,8 @@ private:
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
 
 	bool bIsSingleCaptureMode = false;
+
+	TWeakObjectPtr<ASceneCapture2D> ActiveCaptureActor;
+	TWeakObjectPtr<UTextureRenderTarget2D> ActiveRenderTarget;
 
 };
