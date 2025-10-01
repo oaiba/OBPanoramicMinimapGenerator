@@ -212,8 +212,29 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 				[
 					SAssignNew(CameraHeight, SSpinBox<float>).MinValue(100.f).MaxValue(999999.f).Value(50000.f)
 				]
-				// Orthographic Checkbox
+				// Camera Rotation
+				+ SGridPanel::Slot(0, 15).HAlign(HAlign_Right).Padding(LabelPadding)
+				[
+					SNew(STextBlock).Text(LOCTEXT("CameraRotationLabel", "Camera Rotation (Roll, Pitch, Yaw)"))
+				]
 				+ SGridPanel::Slot(1, 15)
+				[
+					SNew(SWrapBox).UseAllottedSize(true)
+					+ SWrapBox::Slot().Padding(2)
+					[
+						SAssignNew(RotationRollSpinBox, SSpinBox<float>).MinValue(-360.f).MaxValue(360.f).Value(-180.f)
+					]
+					+ SWrapBox::Slot().Padding(2)
+					[
+						SAssignNew(RotationPitchSpinBox, SSpinBox<float>).MinValue(-360.f).MaxValue(360.f).Value(-90.f)
+					]
+					+ SWrapBox::Slot().Padding(2)
+					[
+						SAssignNew(RotationYawSpinBox, SSpinBox<float>).MinValue(-360.f).MaxValue(360.f).Value(0.f)
+					]
+				]
+				// Orthographic Checkbox
+				+ SGridPanel::Slot(1, 16)
 				[
 					SAssignNew(IsOrthographicCheckbox, SCheckBox)
 					.IsChecked(ECheckBoxState::Checked)
@@ -223,22 +244,22 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 				// Camera FOV
-				+ SGridPanel::Slot(0, 16).HAlign(HAlign_Right).Padding(LabelPadding)
+				+ SGridPanel::Slot(0, 17).HAlign(HAlign_Right).Padding(LabelPadding)
 				[
 					SNew(STextBlock).Text(LOCTEXT("CameraFOVLabel", "Camera FOV (Perspective only)"))
 				]
-				+ SGridPanel::Slot(1, 16)
+				+ SGridPanel::Slot(1, 17)
 				[
 					SAssignNew(CameraFOV, SSpinBox<float>).MinValue(10.f).MaxValue(170.f).Value(90.f).IsEnabled(
 						this, &SMinimapGeneratorWindow::IsPerspectiveMode)
 				]
 
 				// --- SECTION: QUALITY ---
-				+ SGridPanel::Slot(0, 17).ColumnSpan(2).Padding(5, 15, 5, 5)
+				+ SGridPanel::Slot(0, 18).ColumnSpan(2).Padding(5, 15, 5, 5)
 				[
 					SNew(STextBlock).Text(LOCTEXT("QualityHeader", "5. Quality Settings"))
 				]
-				+ SGridPanel::Slot(1, 18)
+				+ SGridPanel::Slot(1, 19)
 				[
 					SAssignNew(OverrideQualityCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
 					[
@@ -246,7 +267,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 				// === THÊM KHỐI UI ĐỘNG MỚI ===
-				+ SGridPanel::Slot(0, 19).ColumnSpan(2).Padding(20, 5, 5, 5)
+				+ SGridPanel::Slot(0, 20).ColumnSpan(2).Padding(20, 5, 5, 5)
 				[
 					SNew(SVerticalBox)
 					.Visibility(this, &SMinimapGeneratorWindow::GetOverrideSettingsVisibility)
@@ -388,6 +409,12 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
 	Settings.CameraHeight = CameraHeight->GetValue();
+	// Chú ý thứ tự (Pitch, Yaw, Roll) của constructor FRotator
+	Settings.CameraRotation = FRotator(
+		RotationPitchSpinBox->GetValue(),
+		RotationYawSpinBox->GetValue(),
+		RotationRollSpinBox->GetValue()
+	);
 	Settings.bIsOrthographic = IsOrthographicCheckbox->IsChecked();
 	Settings.CameraFOV = CameraFOV->GetValue();
 	Settings.bOverrideWithHighQualitySettings = OverrideQualityCheckbox->IsChecked();
@@ -423,8 +450,8 @@ FReply SMinimapGeneratorWindow::OnBrowseButtonClicked()
 		const TSharedPtr<SWindow> ParentWindow = FSlateApplication::Get().FindBestParentWindowForDialogs(AsShared());
 
 		const void* ParentWindowHandle = (ParentWindow.IsValid())
-			                                 ? ParentWindow->GetNativeWindow()->GetOSWindowHandle()
-			                                 : nullptr;
+											 ? ParentWindow->GetNativeWindow()->GetOSWindowHandle()
+											 : nullptr;
 
 		FString OutFolderName;
 		const bool bFolderSelected = DesktopPlatform->OpenDirectoryDialog(
@@ -511,7 +538,7 @@ void SMinimapGeneratorWindow::OnProjectionTypeChanged(ECheckBoxState NewState)
 }
 
 void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile,
-                                                int32 TotalTiles)
+												int32 TotalTiles)
 {
 	// Đây là hàm được gọi từ Manager thông qua delegate
 	ProgressBar->SetPercent(Percentage);

@@ -57,6 +57,9 @@ private:
 
 	// Camera Settings
 	TSharedPtr<SSpinBox<float>> CameraHeight;
+	TSharedPtr<SSpinBox<float>> RotationRollSpinBox;
+	TSharedPtr<SSpinBox<float>> RotationPitchSpinBox;
+	TSharedPtr<SSpinBox<float>> RotationYawSpinBox;
 	TSharedPtr<SCheckBox> IsOrthographicCheckbox;
 	TSharedPtr<SSpinBox<float>> CameraFOV;
 

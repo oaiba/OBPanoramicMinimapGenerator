@@ -52,6 +52,9 @@ struct FMinimapCaptureSettings
 	float CameraHeight = 50000.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
+	FRotator CameraRotation = FRotator(-90.f, 0.f, -180.f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
 	bool bIsOrthographic = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera", meta = (EditCondition = "!bIsOrthographic"))
