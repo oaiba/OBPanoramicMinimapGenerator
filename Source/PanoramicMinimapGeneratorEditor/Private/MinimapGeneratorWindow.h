@@ -6,6 +6,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "MinimapGeneratorManager.h" // Include để biết về UMinimapGeneratorManager và FMinimapCaptureSettings
 #include "Slate/DeferredCleanupSlateBrush.h"
+#include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Input/SSpinBox.h"
 
 class SEditableTextBox;
@@ -37,7 +38,25 @@ private:
 	/** Được gọi bởi delegate của Manager để cập nhật UI */
 	void OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles);
 
-private:
+	// === THÊM CÁC BIẾN VÀ HÀM MỚI CHO BACKGROUND ===
+	/** Chế độ nền hiện tại được chọn trên UI */
+	EMinimapBackgroundMode CurrentBackgroundMode = EMinimapBackgroundMode::Transparent;
+
+	/** Con trỏ tới widget chọn màu */
+	FLinearColor SelectedBackgroundColor;
+	FLinearColor GetSelectedBackgroundColor() const;
+	FReply OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent);
+	void OnBackgroundColorChanged(FLinearColor NewColor);
+
+	/** Được gọi khi người dùng thay đổi chế độ nền */
+	void OnBackgroundModeChanged(ECheckBoxState NewState, EMinimapBackgroundMode Mode);
+	/** Kiểm tra xem một chế độ nền có đang được chọn hay không (dùng cho radio button) */
+	ECheckBoxState IsBackgroundModeChecked(EMinimapBackgroundMode Mode) const;
+	
+	/** Quyết định việc hiển thị ô chọn màu */
+	EVisibility GetBackgroundColorPickerVisibility() const;
+	// ============================================
+
 	// --- CON TRỎ TỚI CÁC WIDGET CẦN TƯƠNG TÁC ---
 	// Chúng ta cần lưu lại con trỏ tới các widget nhập liệu để có thể đọc giá trị của chúng
 	void HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath);

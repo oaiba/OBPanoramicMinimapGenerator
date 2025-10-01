@@ -7,6 +7,13 @@
 #include "UObject/Object.h"
 #include "MinimapGeneratorManager.generated.h"
 
+UENUM(BlueprintType)
+enum class EMinimapBackgroundMode : uint8
+{
+	Transparent UMETA(DisplayName = "Transparent"),
+	SolidColor UMETA(DisplayName = "Solid Color"),
+};
+
 // Struct to hold all capture settings, easily passed around and exposed to UI/BP
 USTRUCT(BlueprintType)
 struct FMinimapCaptureSettings
@@ -69,6 +76,12 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output", meta = (
 	Tooltip = "If checked, automatically appends a timestamp (_DD_MM_HH_mm) to the filename."))
 	bool bUseAutoFilename = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
+	EMinimapBackgroundMode BackgroundMode = EMinimapBackgroundMode::SolidColor;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output", meta = (EditCondition = "BackgroundMode == EMinimapBackgroundMode::SolidColor"))
+	FLinearColor BackgroundColor = FLinearColor::Black;
 };
 
 class FMinimapStreamingSourceProvider;

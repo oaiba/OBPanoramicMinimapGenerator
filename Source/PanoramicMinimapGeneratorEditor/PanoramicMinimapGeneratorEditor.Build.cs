@@ -29,7 +29,7 @@ public class PanoramicMinimapGeneratorEditor : ModuleRules
                 "PanoramicMinimapGeneratorRuntime",
                 "RHI",
                 "RenderCore",
-                "InputCore",
+                "InputCore", "AppFramework",
             }
         );
     }

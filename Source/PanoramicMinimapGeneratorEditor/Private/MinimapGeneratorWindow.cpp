@@ -15,6 +15,7 @@
 #include "Selection.h"
 #include "ImageUtils.h"
 #include "Slate/DeferredCleanupSlateBrush.h"
+#include "Widgets/Colors/SColorPicker.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SWrapBox.h"
@@ -178,50 +179,98 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 
+				// Background Mode
+				+ SGridPanel::Slot(0, 10).HAlign(HAlign_Right).Padding(LabelPadding)
+				[
+					SNew(STextBlock).Text(LOCTEXT("BackgroundModeLabel", "Background Mode"))
+				]
+				+ SGridPanel::Slot(1, 10)
+				[
+					SNew(SHorizontalBox)
+					// Radio button cho Transparent
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)
+					[
+						SNew(SCheckBox)
+						.Style(FAppStyle::Get(), "RadioButton")
+						.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
+								   EMinimapBackgroundMode::Transparent)
+						.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
+											 EMinimapBackgroundMode::Transparent)
+						[
+							SNew(STextBlock).Text(LOCTEXT("TransparentRadio", "Transparent"))
+						]
+					]
+					// Radio button cho Solid Color
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SCheckBox)
+						.Style(FAppStyle::Get(), "RadioButton")
+						.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
+								   EMinimapBackgroundMode::SolidColor)
+						.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
+											 EMinimapBackgroundMode::SolidColor)
+						[
+							SNew(STextBlock).Text(LOCTEXT("SolidColorRadio", "Solid Color"))
+						]
+					]
+				]
+
+				// Background Color Picker (chỉ hiện khi cần)
+				+ SGridPanel::Slot(1, 11)
+				.Padding(0, 5, 0, 5)
+				[
+					SNew(SColorBlock)
+									 .Color(this, &SMinimapGeneratorWindow::GetSelectedBackgroundColor)
+									 .OnMouseButtonDown(
+										 this, &SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown)
+									 .Size(FVector2D(100.f, 20.f))
+									 .Visibility(this, &SMinimapGeneratorWindow::GetBackgroundColorPickerVisibility)
+				]
+
 				// --- SECTION: TILING ---
-				+ SGridPanel::Slot(0, 10).ColumnSpan(2).Padding(5, 15, 5, 5)
+				+ SGridPanel::Slot(0, 12).ColumnSpan(2).Padding(5, 15, 5, 5)
 				[
 					SNew(STextBlock).Text(LOCTEXT("TilingHeader", "3. Tiling Settings"))
 				]
 				// Tile Resolution
-				+ SGridPanel::Slot(0, 11).HAlign(HAlign_Right).Padding(LabelPadding)
+				+ SGridPanel::Slot(0, 13).HAlign(HAlign_Right).Padding(LabelPadding)
 				[
 					SNew(STextBlock).Text(LOCTEXT("TileResLabel", "Tile Resolution"))
 				]
-				+ SGridPanel::Slot(1, 11)
+				+ SGridPanel::Slot(1, 13)
 				[
 					SAssignNew(TileResolution, SSpinBox<int32>).MinValue(256).MaxValue(8192).Value(2048)
 				]
 				// Tile Overlap
-				+ SGridPanel::Slot(0, 12).HAlign(HAlign_Right).Padding(LabelPadding)
+				+ SGridPanel::Slot(0, 14).HAlign(HAlign_Right).Padding(LabelPadding)
 				[
 					SNew(STextBlock).Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
 				]
-				+ SGridPanel::Slot(1, 12)
+				+ SGridPanel::Slot(1, 14)
 				[
 					SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(64)
 				]
 
 				// --- SECTION: CAMERA ---
-				+ SGridPanel::Slot(0, 13).ColumnSpan(2).Padding(5, 15, 5, 5)
+				+ SGridPanel::Slot(0, 15).ColumnSpan(2).Padding(5, 15, 5, 5)
 				[
 					SNew(STextBlock).Text(LOCTEXT("CameraHeader", "4. Camera Settings"))
 				]
 				// Camera Height
-				+ SGridPanel::Slot(0, 14).HAlign(HAlign_Right).Padding(LabelPadding)
+				+ SGridPanel::Slot(0, 16).HAlign(HAlign_Right).Padding(LabelPadding)
 				[
 					SNew(STextBlock).Text(LOCTEXT("CameraHeightLabel", "Camera Height"))
 				]
-				+ SGridPanel::Slot(1, 14)
+				+ SGridPanel::Slot(1, 16)
 				[
 					SAssignNew(CameraHeight, SSpinBox<float>).MinValue(100.f).MaxValue(999999.f).Value(50000.f)
 				]
 				// Camera Rotation
-				+ SGridPanel::Slot(0, 15).HAlign(HAlign_Right).Padding(LabelPadding)
+				+ SGridPanel::Slot(0, 17).HAlign(HAlign_Right).Padding(LabelPadding)
 				[
 					SNew(STextBlock).Text(LOCTEXT("CameraRotationLabel", "Camera Rotation (Roll, Pitch, Yaw)"))
 				]
-				+ SGridPanel::Slot(1, 15)
+				+ SGridPanel::Slot(1, 17)
 				[
 					SNew(SWrapBox).UseAllottedSize(true)
 					+ SWrapBox::Slot().Padding(2)
@@ -238,7 +287,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 				// Orthographic Checkbox
-				+ SGridPanel::Slot(1, 16)
+				+ SGridPanel::Slot(1, 18)
 				[
 					SAssignNew(IsOrthographicCheckbox, SCheckBox)
 					.IsChecked(ECheckBoxState::Checked)
@@ -248,22 +297,22 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 				// Camera FOV
-				+ SGridPanel::Slot(0, 17).HAlign(HAlign_Right).Padding(LabelPadding)
+				+ SGridPanel::Slot(0, 19).HAlign(HAlign_Right).Padding(LabelPadding)
 				[
 					SNew(STextBlock).Text(LOCTEXT("CameraFOVLabel", "Camera FOV (Perspective only)"))
 				]
-				+ SGridPanel::Slot(1, 17)
+				+ SGridPanel::Slot(1, 19)
 				[
 					SAssignNew(CameraFOV, SSpinBox<float>).MinValue(10.f).MaxValue(170.f).Value(90.f).IsEnabled(
 						this, &SMinimapGeneratorWindow::IsPerspectiveMode)
 				]
 
 				// --- SECTION: QUALITY ---
-				+ SGridPanel::Slot(0, 18).ColumnSpan(2).Padding(5, 15, 5, 5)
+				+ SGridPanel::Slot(0, 20).ColumnSpan(2).Padding(5, 15, 5, 5)
 				[
 					SNew(STextBlock).Text(LOCTEXT("QualityHeader", "5. Quality Settings"))
 				]
-				+ SGridPanel::Slot(1, 19)
+				+ SGridPanel::Slot(1, 20)
 				[
 					SAssignNew(OverrideQualityCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
 					[
@@ -271,7 +320,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 				// === THÊM KHỐI UI ĐỘNG MỚI ===
-				+ SGridPanel::Slot(0, 20).ColumnSpan(2).Padding(20, 5, 5, 5)
+				+ SGridPanel::Slot(0, 21).ColumnSpan(2).Padding(20, 5, 5, 5)
 				[
 					SNew(SVerticalBox)
 					.Visibility(this, &SMinimapGeneratorWindow::GetOverrideSettingsVisibility)
@@ -430,6 +479,53 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 	}
 }
 
+ECheckBoxState SMinimapGeneratorWindow::IsBackgroundModeChecked(EMinimapBackgroundMode Mode) const
+{
+	return CurrentBackgroundMode == Mode ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+FLinearColor SMinimapGeneratorWindow::GetSelectedBackgroundColor() const
+{
+	return SelectedBackgroundColor;
+}
+
+void SMinimapGeneratorWindow::OnBackgroundColorChanged(const FLinearColor NewColor)
+{
+	SelectedBackgroundColor = NewColor;
+}
+
+FReply SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+{
+	if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	{
+		FColorPickerArgs PickerArgs;
+		PickerArgs.bUseAlpha = true; // Cho phép chọn cả độ trong suốt
+		PickerArgs.DisplayGamma = TAttribute<float>(2.2f);
+		PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateSP(this, &SMinimapGeneratorWindow::OnBackgroundColorChanged);
+		PickerArgs.InitialColor = SelectedBackgroundColor;
+		PickerArgs.ParentWidget = AsShared();
+		
+		OpenColorPicker(PickerArgs);
+
+		return FReply::Handled();
+	}
+
+	return FReply::Unhandled();
+}
+
+void SMinimapGeneratorWindow::OnBackgroundModeChanged(ECheckBoxState NewState, EMinimapBackgroundMode Mode)
+{
+	if (NewState == ECheckBoxState::Checked)
+	{
+		CurrentBackgroundMode = Mode;
+	}
+}
+
+EVisibility SMinimapGeneratorWindow::GetBackgroundColorPickerVisibility() const
+{
+	return CurrentBackgroundMode == EMinimapBackgroundMode::SolidColor ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
 EVisibility SMinimapGeneratorWindow::GetOverrideSettingsVisibility() const
 {
 	return OverrideQualityCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
@@ -459,6 +555,11 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	Settings.OutputHeight = OutputHeight->GetValue();
 	Settings.OutputPath = OutputPath->GetText().ToString();
 	Settings.FileName = FileName->GetText().ToString();
+	Settings.BackgroundMode = CurrentBackgroundMode;
+	if (CurrentBackgroundMode == EMinimapBackgroundMode::SolidColor)
+	{
+		Settings.BackgroundColor = SelectedBackgroundColor;
+	}
 	Settings.bUseAutoFilename = AutoFilenameCheckbox->IsChecked();
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();

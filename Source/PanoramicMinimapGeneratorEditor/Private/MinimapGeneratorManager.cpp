@@ -23,7 +23,7 @@ class FSaveImageTask : public FNonAbandonableTask
 {
 public: // <-- MOVED TO PUBLIC
 	FSaveImageTask(TArray<FColor> InPixelData, const int32 InWidth, const int32 InHeight, FString InFullPath,
-	               const TWeakObjectPtr<UMinimapGeneratorManager> InManager)
+				   const TWeakObjectPtr<UMinimapGeneratorManager> InManager)
 		: PixelData(MoveTemp(InPixelData))
 		  , Width(InWidth)
 		  , Height(InHeight)
@@ -39,7 +39,7 @@ public: // <-- MOVED TO PUBLIC
 			FName("ImageWrapper"));
 		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
 			ImageWrapper.IsValid() && ImageWrapper->SetRaw(PixelData.GetData(), PixelData.Num() * sizeof(FColor), Width,
-			                                               Height, ERGBFormat::BGRA, 8))
+														   Height, ERGBFormat::BGRA, 8))
 		{
 			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
 
@@ -140,6 +140,14 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCap
 UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 {
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
+	if (Settings.BackgroundMode == EMinimapBackgroundMode::Transparent)
+	{
+		RenderTarget->ClearColor = FLinearColor::Transparent;
+	}
+	else // SolidColor
+	{
+		RenderTarget->ClearColor = Settings.BackgroundColor;
+	}
 	RenderTarget->InitCustomFormat(Settings.OutputWidth, Settings.OutputHeight, PF_FloatRGBA, true);
 	return RenderTarget;
 
@@ -192,12 +200,13 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
-	
+
 	CaptureComponent->bCaptureEveryFrame = false;
 	CaptureComponent->bCaptureOnMovement = false;
 	CaptureComponent->TextureTarget = RenderTarget;
 	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
+	CaptureComponent->CompositeMode = SCCM_Additive;
 
 	if (Settings.bOverrideWithHighQualitySettings)
 	{
@@ -217,6 +226,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	{
 		// Giữ nguyên logic cũ khi không override
 		CaptureComponent->CaptureSource = SCS_FinalColorLDR;
+		// CaptureComponent->CaptureSource = SCS_SceneColorHDRNoAlpha;
 	}
 
 	return CaptureActor;
@@ -273,11 +283,11 @@ void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData)
 	const FString FullPath = FPaths::Combine(Settings.OutputPath, FinalFileName);
 
 	(new FAutoDeleteAsyncTask<FSaveImageTask>(MoveTemp(PixelData), Settings.OutputWidth, Settings.OutputHeight,
-	                                          FullPath, this))->StartBackgroundTask();
+											  FullPath, this))->StartBackgroundTask();
 }
 
 void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int32 Height,
-                                                    const TArray<FColor>& PixelData)
+													const TArray<FColor>& PixelData)
 {
 	if (bIsSingleCaptureMode)
 	{
@@ -285,9 +295,9 @@ void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int
 		if (Width != Settings.OutputWidth || Height != Settings.OutputHeight)
 		{
 			UE_LOG(LogTemp, Warning,
-			       TEXT(
-				       "OnScreenshotCaptured: Mismatched resolution for single capture. Ignoring. Expected %dx%d, got %dx%d"
-			       ), Settings.OutputWidth, Settings.OutputHeight, Width, Height);
+				   TEXT(
+					   "OnScreenshotCaptured: Mismatched resolution for single capture. Ignoring. Expected %dx%d, got %dx%d"
+				   ), Settings.OutputWidth, Settings.OutputHeight, Width, Height);
 			return;
 		}
 
@@ -334,7 +344,7 @@ void UMinimapGeneratorManager::OnScreenshotCaptured(const int32 Width, const int
 
 		FTimerHandle NextTileDelayHandle;
 		World->GetTimerManager().SetTimer(NextTileDelayHandle, this, &UMinimapGeneratorManager::ProcessNextTile, 0.1f,
-		                                  false);
+										  false);
 	}
 }
 
@@ -347,8 +357,8 @@ void UMinimapGeneratorManager::CalculateGrid()
 	if (EffectiveTileWidth <= 0 || EffectiveTileHeight <= 0)
 	{
 		UE_LOG(LogTemp, Error,
-		       TEXT("[%s::%s] - Effective tile size is zero or negative. TileOverlap might be too large."), *GetName(),
-		       *FString(__FUNCTION__));
+			   TEXT("[%s::%s] - Effective tile size is zero or negative. TileOverlap might be too large."), *GetName(),
+			   *FString(__FUNCTION__));
 		NumTilesX = 0;
 		NumTilesY = 0;
 		return;
@@ -377,7 +387,7 @@ void UMinimapGeneratorManager::CalculateGrid()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[%s::%s] - Calculated Grid: %d x %d tiles"), *GetName(), *FString(__FUNCTION__),
-	       NumTilesX, NumTilesY);
+		   NumTilesX, NumTilesY);
 }
 
 void UMinimapGeneratorManager::ProcessNextTile()
@@ -391,7 +401,7 @@ void UMinimapGeneratorManager::ProcessNextTile()
 	if (!MinimapStreamer.IsValid())
 	{
 		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - MinimapStreamer is not valid! Aborting process."), *GetName(),
-		       *FString(__FUNCTION__));
+			   *FString(__FUNCTION__));
 		OnAllTasksCompleted();
 		return;
 	}
@@ -424,13 +434,13 @@ void UMinimapGeneratorManager::ProcessNextTile()
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Failed to get WorldPartitionSubsystem! Aborting process."), *GetName(),
-		       *FString(__FUNCTION__));
+			   *FString(__FUNCTION__));
 		OnAllTasksCompleted();
 		return;
 	}
 
 	World->GetTimerManager().SetTimer(StreamingCheckTimer, this, &UMinimapGeneratorManager::CheckStreamingAndCapture,
-	                                  0.5f, true);
+									  0.5f, true);
 }
 
 void UMinimapGeneratorManager::CheckStreamingAndCapture()
@@ -477,8 +487,8 @@ void UMinimapGeneratorManager::CaptureTileWithScreenshot()
 	);
 
 	if (FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->
-		GetActiveViewport()->
-		GetClient()))
+																							  GetActiveViewport()->
+																							  GetClient()))
 	{
 		// 1. Set viewport to Top Orthographic
 		ViewportClient->SetViewportType(ELevelViewportType::LVT_OrthoXY);
@@ -586,7 +596,7 @@ void UMinimapGeneratorManager::StartStitching()
 			if (!CapturedTileData.Contains(CurrentTilePos))
 			{
 				UE_LOG(LogTemp, Error, TEXT("[%s::%s] - Missing data for tile (%d, %d)!"), *GetName(),
-				       *FString(__FUNCTION__), TileX, TileY);
+					   *FString(__FUNCTION__), TileX, TileY);
 				continue;
 			}
 
@@ -651,19 +661,19 @@ void UMinimapGeneratorManager::StartStitching()
 	if (SaveFinalImage(FinalImageData, FinalWidth, FinalHeight))
 	{
 		OnProgress.Broadcast(FText::FromString(TEXT("Completed! Image saved.")), 1.0f, NumTilesX * NumTilesY,
-		                     NumTilesX * NumTilesY);
+							 NumTilesX * NumTilesY);
 	}
 	else
 	{
 		OnProgress.Broadcast(FText::FromString(TEXT("Error saving final image!")), 1.0f, NumTilesX * NumTilesY,
-		                     NumTilesX * NumTilesY);
+							 NumTilesX * NumTilesY);
 	}
 }
 
 void UMinimapGeneratorManager::OnAllTasksCompleted()
 {
 	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - All tiles captured. Starting stitching process."), *GetName(),
-	       *FString(__FUNCTION__));
+		   *FString(__FUNCTION__));
 
 	if (ScreenshotCapturedDelegateHandle.IsValid())
 	{
@@ -681,7 +691,7 @@ bool UMinimapGeneratorManager::SaveFinalImage(const TArray<FColor>& ImageData, i
 	const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
 
 	if (!ImageWrapper.IsValid() || !ImageWrapper->SetRaw(ImageData.GetData(), ImageData.Num() * sizeof(FColor), Width,
-	                                                     Height, ERGBFormat::BGRA, 8))
+														 Height, ERGBFormat::BGRA, 8))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Failed to set raw image data for PNG wrapper."));
 		return false;
