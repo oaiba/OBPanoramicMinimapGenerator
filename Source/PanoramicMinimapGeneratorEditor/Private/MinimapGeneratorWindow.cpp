@@ -21,426 +21,421 @@
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/Layout/SSplitter.h"
+
 #define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
 
+// In MinimapGeneratorWindow.cpp
 
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 {
-	// Tạo đối tượng Manager và bind delegate (giữ nguyên)
+	// --- PHẦN KHỞI TẠO DỮ LIỆU (GIỮ NGUYÊN) ---
 	Manager = TStrongObjectPtr<UMinimapGeneratorManager>(NewObject<UMinimapGeneratorManager>());
 	Manager->OnProgress.AddSP(this, &SMinimapGeneratorWindow::OnCaptureProgress);
 	Manager->OnCaptureComplete.AddSP(this, &SMinimapGeneratorWindow::HandleCaptureCompleted);
 
 	const FString DefaultPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir());
-
-	// Khai báo một biến để dễ dàng tái sử dụng padding cho các nhãn
 	const FMargin LabelPadding(5, 5, 10, 5);
-
+	CurrentBackgroundMode = EMinimapBackgroundMode::SolidColor;
+	SelectedBackgroundColor = FLinearColor::Black;
 	if (const UEnum* CaptureSourceEnum = StaticEnum<ESceneCaptureSource>())
 	{
-		for (int32 i = 0; i < CaptureSourceEnum->NumEnums() - 1; ++i) // -1 để bỏ qua giá trị MAX
+		for (int32 i = 0; i < CaptureSourceEnum->NumEnums() - 1; ++i)
 		{
-			CaptureSourceOptions.Add(MakeShared<FString>(CaptureSourceEnum->GetDisplayNameTextByIndex(i).ToString()));
+			CaptureSourceOptions.Add(
+				MakeShared<FString>(CaptureSourceEnum->GetDisplayNameTextByIndex(i).ToString()));
 		}
-		// Đặt giá trị mặc định
-		CurrentCaptureSource = CaptureSourceOptions[0]; // SCS_FinalColorHDR
+		CurrentCaptureSource = CaptureSourceOptions[4]; // Default to SCS_FinalColorHDR
 	}
 
+	// === BẮT ĐẦU CẤU TRÚC LAYOUT MỚI ===
 	ChildSlot
 	[
-		// Wrap everything in a ScrollBox to handle vertical overflow
-		SNew(SScrollBox)
-		+ SScrollBox::Slot()
+		SNew(SVerticalBox)
+
+		// Slot 1: Chứa SSplitter, chiếm phần lớn không gian
+		+ SVerticalBox::Slot()
+		.FillHeight(1.0f)
 		[
-			SNew(SVerticalBox)
+			SNew(SSplitter)
+			.Orientation(EOrientation::Orient_Horizontal)
 
-			// The main layout is now a GridPanel for clean, two-column alignment
-			+ SVerticalBox::Slot()
-			.Padding(10)
+			// --- PANE BÊN TRÁI (KHU VỰC CÀI ĐẶT) ---
+			+ SSplitter::Slot()
+			.Value(0.4f) // Tỉ lệ 40%
 			[
-				SNew(SGridPanel)
-				.FillColumn(1, 1.0f) // Cho phép cột thứ hai (widget) co giãn theo chiều rộng
-
-				// --- SECTION: REGION ---
-				+ SGridPanel::Slot(0, 0).ColumnSpan(2).Padding(5)
-				[
-					SNew(STextBlock).Text(LOCTEXT("RegionHeader", "1. Capture Region"))
-				]
-
-				// Min Bounds
-				+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("MinBoundsLabel", "Min Bounds"))
-				]
-				+ SGridPanel::Slot(1, 1)
-				[
-					// Use a WrapBox for responsive bounds input
-					SNew(SWrapBox).UseAllottedSize(true)
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(BoundsMinX, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
-					]
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(BoundsMinY, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
-					]
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(BoundsMinZ, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
-					]
-				]
-
-				// Max Bounds
-				+ SGridPanel::Slot(0, 2).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("MaxBoundsLabel", "Max Bounds"))
-				]
-				+ SGridPanel::Slot(1, 2)
-				[
-					SNew(SWrapBox).UseAllottedSize(true)
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(BoundsMaxX, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
-					]
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(BoundsMaxY, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
-					]
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(BoundsMaxZ, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
-					]
-				]
-
-				// Get Bounds Button
-				+ SGridPanel::Slot(1, 3).HAlign(HAlign_Right).Padding(5)
-				[
-					SNew(SButton)
-					.Text(LOCTEXT("GetBoundsButton", "Get Bounds from Selected Actor"))
-					.OnClicked(this, &SMinimapGeneratorWindow::OnGetBoundsFromSelectionClicked)
-				]
-
-				// --- SECTION: OUTPUT ---
-				+ SGridPanel::Slot(0, 4).ColumnSpan(2).Padding(5, 15, 5, 5)
-				[
-					SNew(STextBlock).Text(LOCTEXT("OutputHeader", "2. Output Settings"))
-				]
-				// Output Width
-				+ SGridPanel::Slot(0, 5).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("OutputWidthLabel", "Output Width"))
-				]
-				+ SGridPanel::Slot(1, 5)
-				[
-					SAssignNew(OutputWidth, SSpinBox<int32>).MinValue(256).MaxValue(16384).Value(4096)
-				]
-				// Output Height
-				+ SGridPanel::Slot(0, 6).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("OutputHeightLabel", "Output Height"))
-				]
-				+ SGridPanel::Slot(1, 6)
-				[
-					SAssignNew(OutputHeight, SSpinBox<int32>).MinValue(256).MaxValue(16384).Value(4096)
-				]
-				// Output Path
-				+ SGridPanel::Slot(0, 7).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("OutputPathLabel", "Output Path"))
-				]
-				+ SGridPanel::Slot(1, 7)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.0f)
-					[
-						SAssignNew(OutputPath, SEditableTextBox).Text(FText::FromString(DefaultPath))
-					]
-					+ SHorizontalBox::Slot().AutoWidth()
-					[
-						SNew(SButton).Text(LOCTEXT("BrowseButton", "...")).OnClicked(
-							this, &SMinimapGeneratorWindow::OnBrowseButtonClicked)
-					]
-				]
-				// File Name
-				+ SGridPanel::Slot(0, 8).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("FileNameLabel", "File Name"))
-				]
-				+ SGridPanel::Slot(1, 8)
-				[
-					SAssignNew(FileName, SEditableTextBox).Text(LOCTEXT("DefaultFileName", "Minimap_Result"))
-				]
-				// Auto Filename
-				+ SGridPanel::Slot(1, 9)
-				[
-					SAssignNew(AutoFilenameCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
-					[
-						SNew(STextBlock).Text(LOCTEXT("AutoFilenameLabel", "Auto-Generate Filename with Timestamp"))
-					]
-				]
-
-				// Background Mode
-				+ SGridPanel::Slot(0, 10).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("BackgroundModeLabel", "Background Mode"))
-				]
-				+ SGridPanel::Slot(1, 10)
-				[
-					SNew(SHorizontalBox)
-					// Radio button cho Transparent
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)
-					[
-						SNew(SCheckBox)
-						.Style(FAppStyle::Get(), "RadioButton")
-						.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
-								   EMinimapBackgroundMode::Transparent)
-						.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
-											 EMinimapBackgroundMode::Transparent)
-						[
-							SNew(STextBlock).Text(LOCTEXT("TransparentRadio", "Transparent"))
-						]
-					]
-					// Radio button cho Solid Color
-					+ SHorizontalBox::Slot().AutoWidth()
-					[
-						SNew(SCheckBox)
-						.Style(FAppStyle::Get(), "RadioButton")
-						.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
-								   EMinimapBackgroundMode::SolidColor)
-						.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
-											 EMinimapBackgroundMode::SolidColor)
-						[
-							SNew(STextBlock).Text(LOCTEXT("SolidColorRadio", "Solid Color"))
-						]
-					]
-				]
-
-				// Background Color Picker (chỉ hiện khi cần)
-				+ SGridPanel::Slot(1, 11)
-				.Padding(0, 5, 0, 5)
-				[
-					SNew(SColorBlock)
-									 .Color(this, &SMinimapGeneratorWindow::GetSelectedBackgroundColor)
-									 .OnMouseButtonDown(
-										 this, &SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown)
-									 .Size(FVector2D(100.f, 20.f))
-									 .Visibility(this, &SMinimapGeneratorWindow::GetBackgroundColorPickerVisibility)
-				]
-
-				// --- SECTION: TILING ---
-				+ SGridPanel::Slot(0, 12).ColumnSpan(2).Padding(5, 15, 5, 5)
-				[
-					SNew(STextBlock).Text(LOCTEXT("TilingHeader", "3. Tiling Settings"))
-				]
-				// Tile Resolution
-				+ SGridPanel::Slot(0, 13).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("TileResLabel", "Tile Resolution"))
-				]
-				+ SGridPanel::Slot(1, 13)
-				[
-					SAssignNew(TileResolution, SSpinBox<int32>).MinValue(256).MaxValue(8192).Value(2048)
-				]
-				// Tile Overlap
-				+ SGridPanel::Slot(0, 14).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
-				]
-				+ SGridPanel::Slot(1, 14)
-				[
-					SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(64)
-				]
-
-				// --- SECTION: CAMERA ---
-				+ SGridPanel::Slot(0, 15).ColumnSpan(2).Padding(5, 15, 5, 5)
-				[
-					SNew(STextBlock).Text(LOCTEXT("CameraHeader", "4. Camera Settings"))
-				]
-				// Camera Height
-				+ SGridPanel::Slot(0, 16).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("CameraHeightLabel", "Camera Height"))
-				]
-				+ SGridPanel::Slot(1, 16)
-				[
-					SAssignNew(CameraHeight, SSpinBox<float>).MinValue(100.f).MaxValue(999999.f).Value(50000.f)
-				]
-				// Camera Rotation
-				+ SGridPanel::Slot(0, 17).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("CameraRotationLabel", "Camera Rotation (Roll, Pitch, Yaw)"))
-				]
-				+ SGridPanel::Slot(1, 17)
-				[
-					SNew(SWrapBox).UseAllottedSize(true)
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(RotationRollSpinBox, SSpinBox<float>).MinValue(-360.f).MaxValue(360.f).Value(-180.f)
-					]
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(RotationPitchSpinBox, SSpinBox<float>).MinValue(-360.f).MaxValue(360.f).Value(-90.f)
-					]
-					+ SWrapBox::Slot().Padding(2)
-					[
-						SAssignNew(RotationYawSpinBox, SSpinBox<float>).MinValue(-360.f).MaxValue(360.f).Value(0.f)
-					]
-				]
-				// Orthographic Checkbox
-				+ SGridPanel::Slot(1, 18)
-				[
-					SAssignNew(IsOrthographicCheckbox, SCheckBox)
-					.IsChecked(ECheckBoxState::Checked)
-					.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnProjectionTypeChanged)
-					[
-						SNew(STextBlock).Text(LOCTEXT("IsOrthoLabel", "Use Orthographic Projection"))
-					]
-				]
-				// Camera FOV
-				+ SGridPanel::Slot(0, 19).HAlign(HAlign_Right).Padding(LabelPadding)
-				[
-					SNew(STextBlock).Text(LOCTEXT("CameraFOVLabel", "Camera FOV (Perspective only)"))
-				]
-				+ SGridPanel::Slot(1, 19)
-				[
-					SAssignNew(CameraFOV, SSpinBox<float>).MinValue(10.f).MaxValue(170.f).Value(90.f).IsEnabled(
-						this, &SMinimapGeneratorWindow::IsPerspectiveMode)
-				]
-
-				// --- SECTION: QUALITY ---
-				+ SGridPanel::Slot(0, 20).ColumnSpan(2).Padding(5, 15, 5, 5)
-				[
-					SNew(STextBlock).Text(LOCTEXT("QualityHeader", "5. Quality Settings"))
-				]
-				+ SGridPanel::Slot(1, 20)
-				[
-					SAssignNew(OverrideQualityCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
-					[
-						SNew(STextBlock).Text(LOCTEXT("OverrideQualityLabel", "Override With High Quality Settings"))
-					]
-				]
-				// === THÊM KHỐI UI ĐỘNG MỚI ===
-				+ SGridPanel::Slot(0, 21).ColumnSpan(2).Padding(20, 5, 5, 5)
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				.Padding(10)
 				[
 					SNew(SVerticalBox)
-					.Visibility(this, &SMinimapGeneratorWindow::GetOverrideSettingsVisibility)
-					// <<-- ĐIỀU KHIỂN HIỂN THỊ
 
-					// Capture Source
-					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+					// --- SECTION: REGION (dùng SExpandableArea) ---
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						SNew(SExpandableArea)
+						.InitiallyCollapsed(false)
+						.HeaderContent()
 						[
-							SNew(STextBlock).Text(LOCTEXT("CaptureSourceLabel", "Capture Source"))
+							SNew(STextBlock)
+							.Text(LOCTEXT("RegionHeader", "1. Capture Region"))
+							.Font(FAppStyle::GetFontStyle("BoldFont"))
 						]
-						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						.BodyContent()
 						[
-							SAssignNew(CaptureSourceComboBox, SComboBox<TSharedPtr<FString>>)
-							.OptionsSource(&CaptureSourceOptions)
-							.OnSelectionChanged(this, &SMinimapGeneratorWindow::OnCaptureSourceChanged)
-							.OnGenerateWidget_Lambda([](TSharedPtr<FString> InOption)
-							{
-								return SNew(STextBlock).Text(FText::FromString(*InOption));
-							})
+							SNew(SGridPanel).FillColumn(1, 1.0f)
+							+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
 							[
-								SNew(STextBlock).Text_Lambda(
-									[this] { return FText::FromString(*CurrentCaptureSource); })
+								SNew(STextBlock).Text(LOCTEXT("MinBoundsLabel", "Min Bounds"))
+							]
+							+ SGridPanel::Slot(1, 0)
+							[
+								SNew(SWrapBox).UseAllottedSize(true)
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(BoundsMinX, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(BoundsMinY, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(BoundsMinZ, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
+								]
+							]
+							+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("MaxBoundsLabel", "Max Bounds"))
+							]
+							+ SGridPanel::Slot(1, 1)
+							[
+								SNew(SWrapBox).UseAllottedSize(true)
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(BoundsMaxX, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(BoundsMaxY, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(BoundsMaxZ, SSpinBox<float>).MinValue(-999999).MaxValue(999999)
+								]
+							]
+							+ SGridPanel::Slot(1, 2).HAlign(HAlign_Right).Padding(5)
+							[
+								SNew(SButton)
+								.Text(LOCTEXT("GetBoundsButton", "Get Bounds from Selected Actor"))
+								.OnClicked(this, &SMinimapGeneratorWindow::OnGetBoundsFromSelectionClicked)
 							]
 						]
 					]
-					// Ambient Occlusion Intensity
-					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+
+					// --- SECTION: TILING (dùng SExpandableArea) ---
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						SNew(SExpandableArea)
+						.InitiallyCollapsed(true)
+						.HeaderContent()
 						[
-							SNew(STextBlock).Text(LOCTEXT("AOIntensityLabel", "AO Intensity"))
+							SNew(STextBlock).Text(LOCTEXT("TilingHeader", "2. Tiling Settings")).Font(
+								FAppStyle::GetFontStyle("BoldFont"))
 						]
-						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						.BodyContent()
 						[
-							SAssignNew(AOIntensitySpinBox, SSpinBox<float>)
-							.MinValue(0.f)
-							.MaxValue(1.f)
-							.Value(0.5f)
-							.Delta(0.05f)
+							SNew(SGridPanel).FillColumn(1, 1.0f)
+							+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("TileResLabel", "Tile Resolution"))
+							]
+							+ SGridPanel::Slot(1, 0)
+							[
+								SAssignNew(TileResolution, SSpinBox<int32>).MinValue(256).MaxValue(8192).Value(2048)
+							]
+							+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
+							]
+							+ SGridPanel::Slot(1, 1)
+							[
+								SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(64)
+							]
 						]
 					]
-					// Ambient Occlusion Quality
-					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+
+					// --- SECTION: CAMERA (dùng SExpandableArea) ---
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						SNew(SExpandableArea)
+						.InitiallyCollapsed(true)
+						.HeaderContent()
 						[
-							SNew(STextBlock).Text(LOCTEXT("AOQualityLabel", "AO Quality"))
+							SNew(STextBlock).Text(LOCTEXT("CameraHeader", "3. Camera Settings")).Font(
+								FAppStyle::GetFontStyle("BoldFont"))
 						]
-						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						.BodyContent()
 						[
-							SAssignNew(AOQualitySpinBox, SSpinBox<float>).MinValue(0.f).MaxValue(100.f).Value(100.f)
+							SNew(SGridPanel).FillColumn(1, 1.0f)
+							+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("CameraHeightLabel", "Camera Height"))
+							]
+							+ SGridPanel::Slot(1, 0)
+							[
+								SAssignNew(CameraHeight, SSpinBox<float>).MinValue(100.f).MaxValue(999999.f).Value(
+									50000.f)
+							]
+							+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("CameraRotationLabel", "Camera Rotation (R, P, Y)"))
+							]
+							+ SGridPanel::Slot(1, 1)
+							[
+								SNew(SWrapBox).UseAllottedSize(true)
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(RotationRollSpinBox, SSpinBox<float>)
+									.MinValue(-360.f)
+									.MaxValue(360.f)
+									.Value(-180.f)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(RotationPitchSpinBox, SSpinBox<float>)
+									.MinValue(-360.f)
+									.MaxValue(360.f)
+									.Value(-90.f)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SAssignNew(RotationYawSpinBox, SSpinBox<float>)
+									.MinValue(-360.f)
+									.MaxValue(360.f)
+									.Value(0.f)
+								]
+							]
+							+ SGridPanel::Slot(1, 2)
+							[
+								SAssignNew(IsOrthographicCheckbox, SCheckBox)
+								.IsChecked(ECheckBoxState::Checked)
+								.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnProjectionTypeChanged)
+								[
+									SNew(STextBlock).Text(LOCTEXT("IsOrthoLabel", "Use Orthographic Projection"))
+								]
+							]
+							+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("CameraFOVLabel", "Camera FOV (Perspective only)"))
+							]
+							+ SGridPanel::Slot(1, 3)
+							[
+								SAssignNew(CameraFOV, SSpinBox<float>)
+								.MinValue(10.f)
+								.MaxValue(170.f)
+								.Value(90.f)
+								.IsEnabled(this, &SMinimapGeneratorWindow::IsPerspectiveMode)
+							]
 						]
 					]
-					// Screen Space Reflection Intensity
-					+ SVerticalBox::Slot().AutoHeight().Padding(5)
+
+					// --- SECTION: QUALITY (dùng SExpandableArea) ---
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+						SNew(SExpandableArea)
+						.InitiallyCollapsed(true)
+						.HeaderContent()
 						[
-							SNew(STextBlock).Text(LOCTEXT("SSRIntensityLabel", "SSR Intensity"))
+							SNew(STextBlock).Text(LOCTEXT("QualityHeader", "4. Quality Settings")).Font(
+								FAppStyle::GetFontStyle("BoldFont"))
 						]
-						+ SHorizontalBox::Slot().FillWidth(0.6f)
+						.BodyContent()
 						[
-							SAssignNew(SSRIntensitySpinBox, SSpinBox<float>).MinValue(0.f).MaxValue(100.f).Value(100.f)
-						]
-					]
-					// Screen Space Reflection Quality
-					+ SVerticalBox::Slot().AutoHeight().Padding(5)
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
-						[
-							SNew(STextBlock).Text(LOCTEXT("SSRQualityLabel", "SSR Quality"))
-						]
-						+ SHorizontalBox::Slot().FillWidth(0.6f)
-						[
-							SAssignNew(SSRQualitySpinBox, SSpinBox<float>).MinValue(0.f).MaxValue(100.f).Value(100.f)
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight().Padding(15, 5)
+							[
+								SAssignNew(OverrideQualityCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
+								[
+									SNew(STextBlock).Text(
+										LOCTEXT("OverrideQualityLabel", "Override Editor Scalability Settings"))
+								]
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(20, 5, 5, 5)
+							[
+								SNew(SVerticalBox).Visibility(
+									this, &SMinimapGeneratorWindow::GetOverrideSettingsVisibility)
+								// ... (Các widget override AO, SSR, CaptureSource... giữ nguyên)
+							]
 						]
 					]
 				]
 			]
+			// --- PANE BÊN PHẢI (PREVIEW VÀ OUTPUT) ---
+			+ SSplitter::Slot()
+			.Value(0.6f) // Tỉ lệ 60%
+			[
+				SNew(SVerticalBox)
 
-			// --- SECTION: ACTION & PROGRESS ---
-			// Các nút bấm và thanh progress bar được đặt bên ngoài GridPanel để chúng luôn cố định ở cuối
-			+ SVerticalBox::Slot().AutoHeight().Padding(10, 20, 10, 5)
+				// --- KHU VỰC PREVIEW ẢNH ---
+				+ SVerticalBox::Slot()
+				  .FillHeight(1.0f) // Cho khu vực preview chiếm phần lớn không gian
+				  .Padding(5)
+				[
+					SNew(SBorder)
+					.Padding(FMargin(3))
+					.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
+					.VAlign(VAlign_Center)
+					.HAlign(HAlign_Center)
+					[
+						SNew(SVerticalBox)
+						// + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 10)
+						// [
+						// 	SNew(STextBlock)
+						// 	.Text(LOCTEXT("PreviewHeader", "PREVIEW"))
+						// 	.Font(FAppStyle::GetFontStyle("BoldFont"))
+						// ]
+						+ SVerticalBox::Slot().FillHeight(1.0f)
+						[
+							SAssignNew(ImageContainer, SBox)
+							[
+								SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
+								[
+									SAssignNew(FinalImageView, SImage)
+								]
+							]
+						]
+					]
+				]
+
+				// --- KHU VỰC CÀI ĐẶT OUTPUT (dùng SExpandableArea) ---
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(5)
+				[
+					SNew(SExpandableArea)
+					.InitiallyCollapsed(false)
+					.HeaderContent()
+					[
+						SNew(STextBlock).Text(LOCTEXT("OutputHeaderRight", "Output Settings")).Font(
+							FAppStyle::GetFontStyle("BoldFont"))
+					]
+					.BodyContent()
+					[
+						SNew(SGridPanel).FillColumn(1, 1.0f)
+						+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("OutputWidthLabel", "Output Width"))
+						]
+						+ SGridPanel::Slot(1, 0)
+						[
+							SAssignNew(OutputWidth, SSpinBox<int32>).MinValue(256).MaxValue(16384).Value(4096)
+						]
+						+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("OutputHeightLabel", "Output Height"))
+						]
+						+ SGridPanel::Slot(1, 1)
+						[
+							SAssignNew(OutputHeight, SSpinBox<int32>).MinValue(256).MaxValue(16384).Value(4096)
+						]
+						+ SGridPanel::Slot(0, 2).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("OutputPathLabel", "Output Path"))
+						]
+						+ SGridPanel::Slot(1, 2)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().FillWidth(1.0f)
+							[
+								SAssignNew(OutputPath, SEditableTextBox).Text(FText::FromString(DefaultPath))
+							]
+							+ SHorizontalBox::Slot().AutoWidth()
+							[
+								SNew(SButton).Text(LOCTEXT("BrowseButton", "...")).OnClicked(
+									this, &SMinimapGeneratorWindow::OnBrowseButtonClicked)
+							]
+						]
+						+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("FileNameLabel", "File Name"))
+						]
+						+ SGridPanel::Slot(1, 3)
+						[
+							SAssignNew(FileName, SEditableTextBox).Text(LOCTEXT("DefaultFileName", "Minimap_Result"))
+						]
+						+ SGridPanel::Slot(1, 4)
+						[
+							SAssignNew(AutoFilenameCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
+							[
+								SNew(STextBlock).Text(LOCTEXT("AutoFilenameLabel",
+															  "Auto-Generate Filename with Timestamp"))
+							]
+						]
+						+ SGridPanel::Slot(0, 5).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("BackgroundModeLabel", "Background Mode"))
+						]
+						+ SGridPanel::Slot(1, 5)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)
+							[
+								SNew(SCheckBox)
+								.Style(FAppStyle::Get(), "RadioButton")
+								.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
+										   EMinimapBackgroundMode::Transparent)
+								.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
+													 EMinimapBackgroundMode::Transparent)
+								[
+									SNew(STextBlock).Text(LOCTEXT("TransparentRadio", "Transparent"))
+								]
+							]
+							+ SHorizontalBox::Slot().AutoWidth()
+							[
+								SNew(SCheckBox)
+								.Style(FAppStyle::Get(), "RadioButton")
+								.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
+										   EMinimapBackgroundMode::SolidColor)
+								.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
+													 EMinimapBackgroundMode::SolidColor)
+								[
+									SNew(STextBlock).Text(LOCTEXT("SolidColorRadio", "Solid Color"))
+								]
+							]
+						]
+						+ SGridPanel::Slot(1, 6).Padding(0, 5, 0, 5)
+						[
+							SNew(SColorBlock)
+							.Color(this, &SMinimapGeneratorWindow::GetSelectedBackgroundColor)
+							.OnMouseButtonDown(this, &SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown)
+							.Size(FVector2D(100.f, 20.f))
+							.Visibility(this, &SMinimapGeneratorWindow::GetBackgroundColorPickerVisibility)
+						]
+					]
+				]
+			]
+		]
+		// Slot 2: Chứa các nút bấm và progress bar, nằm cố định ở dưới cùng
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(10)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
 				SAssignNew(StartButton, SButton)
 				.Text(LOCTEXT("StartCaptureButton", "Start Capture Process"))
 				.HAlign(HAlign_Center)
 				.OnClicked(this, &SMinimapGeneratorWindow::OnStartCaptureClicked)
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(5)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
 				SAssignNew(ProgressBar, SProgressBar).Percent(0.0f).Visibility(EVisibility::Collapsed)
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(5)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
 				SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Collapsed)
-			]
-			+ SVerticalBox::Slot()
-			.Padding(10)
-			.AutoHeight()
-			[
-				SAssignNew(ImageContainer, SBox)
-												.Visibility(EVisibility::Collapsed) // Ban đầu ẩn đi
-												.HAlign(HAlign_Center)
-												.MaxDesiredHeight(512.f) // Vẫn giữ để giới hạn kích thước tối đa
-				[
-					// SScaleBox sẽ tự động xử lý việc co giãn theo tỉ lệ
-					SNew(SScaleBox)
-					.Stretch(EStretch::ScaleToFit) // Đây là thuộc tính quan trọng nhất
-					[
-						SAssignNew(FinalImageView, SImage)
-					]
-				]
 			]
 		]
 	];
@@ -494,17 +489,19 @@ void SMinimapGeneratorWindow::OnBackgroundColorChanged(const FLinearColor NewCol
 	SelectedBackgroundColor = NewColor;
 }
 
-FReply SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+FReply SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry,
+																	  const FPointerEvent& MouseEvent)
 {
 	if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
 		FColorPickerArgs PickerArgs;
 		PickerArgs.bUseAlpha = true; // Cho phép chọn cả độ trong suốt
 		PickerArgs.DisplayGamma = TAttribute<float>(2.2f);
-		PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateSP(this, &SMinimapGeneratorWindow::OnBackgroundColorChanged);
+		PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateSP(
+			this, &SMinimapGeneratorWindow::OnBackgroundColorChanged);
 		PickerArgs.InitialColor = SelectedBackgroundColor;
 		PickerArgs.ParentWidget = AsShared();
-		
+
 		OpenColorPicker(PickerArgs);
 
 		return FReply::Handled();
