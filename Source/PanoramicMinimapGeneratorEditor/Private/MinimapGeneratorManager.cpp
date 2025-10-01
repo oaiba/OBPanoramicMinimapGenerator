@@ -193,7 +193,9 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
-
+	
+	CaptureComponent->bCaptureEveryFrame = false;
+	CaptureComponent->bCaptureOnMovement = false;
 	CaptureComponent->TextureTarget = RenderTarget;
 	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
