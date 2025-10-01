@@ -76,6 +76,7 @@ class FMinimapStreamingSourceProvider;
 // Delegate to report progress back to the UI
 DECLARE_MULTICAST_DELEGATE_FourParams(FOnMinimapProgress, const FText&, /*Status*/ float, /*Percentage*/ int32,
                                       /*CurrentTile*/ int32 /*TotalTiles*/);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnMinimapCaptureComplete, bool /*bSuccess*/, const FString& /*FinalImagePath*/);
 
 /**
  * 
@@ -91,13 +92,13 @@ public:
 	void StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings);
 
 	// Delegate for UI updates
-	// UPROPERTY()
 	FOnMinimapProgress OnProgress;
+	FOnMinimapCaptureComplete OnCaptureComplete;
 
 	void OnTileCaptureCompleted(int32 TileX, int32 TileY, TArray<FColor> PixelData);
 	
 	// Callback function when the async save task is complete
-	void OnSaveTaskCompleted(bool bSuccess) const;
+	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath);
 private:
 	// Main steps of the process
 	void CalculateGrid();

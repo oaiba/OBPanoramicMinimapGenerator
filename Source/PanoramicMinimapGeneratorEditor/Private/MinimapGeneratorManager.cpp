@@ -43,12 +43,11 @@ public: // <-- MOVED TO PUBLIC
 		{
 			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
 
-			// After work is done, schedule a task on the Game Thread to report completion
-			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr, bSuccess]
+			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr, bSuccess, Path = this->FullPath]
 			{
-				if (const UMinimapGeneratorManager* Manager = ManagerPtr.Get())
+				if (UMinimapGeneratorManager* Manager = ManagerPtr.Get())
 				{
-					Manager->OnSaveTaskCompleted(bSuccess);
+					Manager->OnSaveTaskCompleted(bSuccess, Path);
 				}
 			});
 		}
@@ -57,9 +56,9 @@ public: // <-- MOVED TO PUBLIC
 			// Also report failure back to the Game Thread
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr]
 			{
-				if (const UMinimapGeneratorManager* Manager = ManagerPtr.Get())
+				if (UMinimapGeneratorManager* Manager = ManagerPtr.Get())
 				{
-					Manager->OnSaveTaskCompleted(false);
+					Manager->OnSaveTaskCompleted(false, TEXT(""));
 				}
 			});
 		}
@@ -100,18 +99,18 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	ProcessNextTile();
 }
 
-void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess) const
+void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath)
 {
 	if (bSuccess)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Async save task completed successfully."));
-		OnProgress.Broadcast(FText::FromString(TEXT("High Quality Capture Completed! Image saved.")), 1.0f, 1, 1);
+		UE_LOG(LogTemp, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
 	}
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("Async save task failed."));
-		OnProgress.Broadcast(FText::FromString(TEXT("Error saving high quality image!")), 1.0f, 1, 1);
 	}
+	// Broadcast delegate mới thay vì OnProgress
+	OnCaptureComplete.Broadcast(bSuccess, SavedImagePath);
 }
 
 void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings)
@@ -232,7 +231,7 @@ void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 	if (!CaptureActor || !RenderTarget)
 	{
 		UE_LOG(LogTemp, Error, TEXT("Capture Actor or Render Target became invalid before pixels could be read."));
-		OnSaveTaskCompleted(false);
+		OnSaveTaskCompleted(false, TEXT(""));
 		return;
 	}
 
@@ -256,7 +255,7 @@ void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("Failed to read pixels from Render Target."));
-		OnSaveTaskCompleted(false);
+		OnSaveTaskCompleted(false, TEXT(""));
 	}
 }
 

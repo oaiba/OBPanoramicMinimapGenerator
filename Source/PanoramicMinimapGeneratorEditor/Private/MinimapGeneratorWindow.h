@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "MinimapGeneratorManager.h" // Include để biết về UMinimapGeneratorManager và FMinimapCaptureSettings
+#include "Slate/DeferredCleanupSlateBrush.h"
 #include "Widgets/Input/SSpinBox.h"
 
 class SEditableTextBox;
@@ -39,6 +40,7 @@ private:
 private:
 	// --- CON TRỎ TỚI CÁC WIDGET CẦN TƯƠNG TÁC ---
 	// Chúng ta cần lưu lại con trỏ tới các widget nhập liệu để có thể đọc giá trị của chúng
+	void HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath);
 
 	// Region Settings
 	TSharedPtr<SSpinBox<float>> BoundsMinX, BoundsMinY, BoundsMinZ;
@@ -88,6 +90,10 @@ private:
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;
 	TSharedPtr<SButton> StartButton;
+
+	TSharedPtr<SBox> ImageContainer; // Container để dễ dàng ẩn/hiện
+	TSharedPtr<SImage> FinalImageView;
+	TSharedPtr<ISlateBrushSource> FinalImageBrushSource; // Lưu trữ nguồn brush để quản lý vòng đời
 
 	// --- LOGIC BACKEND ---
 

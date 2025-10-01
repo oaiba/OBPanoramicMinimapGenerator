@@ -13,18 +13,22 @@
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Editor.h"
 #include "Selection.h"
-
-#define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
+#include "ImageUtils.h"
+#include "Slate/DeferredCleanupSlateBrush.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
+#include "Widgets/Layout/SScaleBox.h"
+#define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
+
 
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 {
 	// Tạo đối tượng Manager và bind delegate (giữ nguyên)
 	Manager = TStrongObjectPtr<UMinimapGeneratorManager>(NewObject<UMinimapGeneratorManager>());
 	Manager->OnProgress.AddSP(this, &SMinimapGeneratorWindow::OnCaptureProgress);
+	Manager->OnCaptureComplete.AddSP(this, &SMinimapGeneratorWindow::HandleCaptureCompleted);
 
 	const FString DefaultPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir());
 
@@ -372,8 +376,58 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			[
 				SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Collapsed)
 			]
+			+ SVerticalBox::Slot()
+			.Padding(10)
+			.AutoHeight()
+			[
+				SAssignNew(ImageContainer, SBox)
+												.Visibility(EVisibility::Collapsed) // Ban đầu ẩn đi
+												.HAlign(HAlign_Center)
+												.MaxDesiredHeight(512.f) // Vẫn giữ để giới hạn kích thước tối đa
+				[
+					// SScaleBox sẽ tự động xử lý việc co giãn theo tỉ lệ
+					SNew(SScaleBox)
+					.Stretch(EStretch::ScaleToFit) // Đây là thuộc tính quan trọng nhất
+					[
+						SAssignNew(FinalImageView, SImage)
+					]
+				]
+			]
 		]
 	];
+}
+
+void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath)
+{
+	StartButton->SetEnabled(true);
+
+	if (bSuccess && !FinalImagePath.IsEmpty() && IFileManager::Get().FileExists(*FinalImagePath))
+	{
+		if (UTexture2D* LoadedTexture = FImageUtils::ImportFileAsTexture2D(FinalImagePath))
+		{
+			// 1. Tạo một FDeferredCleanupSlateBrush và lưu nó vào biến thành viên để quản lý vòng đời.
+			//    Hàm CreateBrush trả về TSharedRef, chúng ta gán nó cho TSharedPtr.
+			FinalImageBrushSource = FDeferredCleanupSlateBrush::CreateBrush(
+				LoadedTexture,
+				FVector2D(LoadedTexture->GetSizeX(), LoadedTexture->GetSizeY())
+			);
+
+			// 2. Lấy con trỏ FSlateBrush* từ bên trong nó và gán cho SImage.
+			FinalImageView->SetImage(FinalImageBrushSource->GetSlateBrush());
+			ImageContainer->SetVisibility(EVisibility::Visible);
+
+			UE_LOG(LogTemp, Log, TEXT("Successfully loaded and displayed image from %s"), *FinalImagePath);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to load texture from file %s"), *FinalImagePath);
+			ImageContainer->SetVisibility(EVisibility::Collapsed);
+		}
+	}
+	else
+	{
+		ImageContainer->SetVisibility(EVisibility::Collapsed);
+	}
 }
 
 EVisibility SMinimapGeneratorWindow::GetOverrideSettingsVisibility() const
