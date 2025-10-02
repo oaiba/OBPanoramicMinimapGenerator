@@ -64,6 +64,68 @@ protected:
 	TWeakObjectPtr<UMinimapGeneratorManager> ManagerPtr;
 };
 
+// =================== START OF NEW CODE ===================
+// AsyncTask to save INDIVIDUAL DEBUG TILES to disk on a background thread.
+// This task is simpler and does NOT call back to the manager to avoid triggering finalization logic.
+class FSaveDebugTileTask : public FNonAbandonableTask
+{
+public:
+	FSaveDebugTileTask(TArray<FColor> InPixelData, const int32 InWidth, const int32 InHeight, FString InFullPath)
+		: PixelData(MoveTemp(InPixelData)), Width(InWidth), Height(InHeight), FullPath(MoveTemp(InFullPath)) {}
+
+	void DoWork()
+	{
+		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
+		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+			ImageWrapper.IsValid() && ImageWrapper->SetRaw(PixelData.GetData(), PixelData.Num() * sizeof(FColor), Width, Height, ERGBFormat::BGRA, 8))
+		{
+			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
+			
+			// Log the result back on the game thread for visibility
+			AsyncTask(ENamedThreads::GameThread, [bSuccess, Path = this->FullPath]
+			{
+				if (bSuccess)
+				{
+					UE_LOG(LogTemp, Log, TEXT("Debug tile saved successfully: %s"), *Path);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Error, TEXT("Failed to save debug tile: %s"), *Path);
+				}
+			});
+		}
+		else
+		{
+			// Log failure
+			AsyncTask(ENamedThreads::GameThread, [Path = this->FullPath]
+			{
+				UE_LOG(LogTemp, Error, TEXT("ImageWrapper failed for debug tile: %s"), *Path);
+			});
+		}
+	}
+
+	FORCEINLINE TStatId GetStatId() const { RETURN_QUICK_DECLARE_CYCLE_STAT(FSaveDebugTileTask, STATGROUP_ThreadPoolAsyncTasks); }
+
+protected:
+	TArray<FColor> PixelData;
+	int32 Width;
+	int32 Height;
+	FString FullPath;
+};
+
+// Helper function to start the debug tile saving task
+void SaveDebugTileImage(const FString& BasePath, const FString& BaseFileName, const TArray<FColor>& PixelData, int32 TileX, int32 TileY, int32 TileResolution)
+{
+	// Create a descriptive filename for the debug tile, e.g., "Minimap_Result_Tile_0_1.png"
+	const FString DebugFileName = FString::Printf(TEXT("%s_Tile_%d_%d.png"), *BaseFileName, TileX, TileY);
+	const FString FullPath = FPaths::Combine(BasePath, DebugFileName);
+
+	// Start the dedicated async task for saving the debug tile.
+	// We pass a copy of PixelData because the original will be moved into the main TMap.
+	(new FAutoDeleteAsyncTask<FSaveDebugTileTask>(PixelData, TileResolution, TileResolution, FullPath))->StartBackgroundTask();
+}
+// =================== END OF NEW CODE ===================
+
 void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings& InSettings)
 {
 	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
@@ -520,6 +582,10 @@ void UMinimapGeneratorManager::CalculateGrid()
 	UE_LOG(LogTemp, Log, TEXT("Calculated Grid: %d x %d tiles"), NumTilesX, NumTilesY);
 }
 
+// MinimapGeneratorManager.cpp
+
+// ... (các hàm trước CaptureNextTile giữ nguyên) ...
+
 void UMinimapGeneratorManager::CaptureNextTile()
 {
 	if (CurrentTileIndex >= NumTilesX * NumTilesY)
@@ -527,31 +593,51 @@ void UMinimapGeneratorManager::CaptureNextTile()
 		StartStitching();
 		return;
 	}
-	if (!ActiveCaptureActor.IsValid())
+	if (!ActiveCaptureActor.IsValid() || !ActiveRenderTarget.IsValid())
 	{
-		OnCaptureComplete.Broadcast(false, TEXT("Capture actor became invalid during tiling process."));
+		OnCaptureComplete.Broadcast(false, TEXT("Capture actor or render target became invalid during tiling process."));
 		return;
 	}
 	
 	const int32 TileX = CurrentTileIndex % NumTilesX;
 	const int32 TileY = CurrentTileIndex / NumTilesX;
 	
-	const FVector WorldBoundsSize = Settings.CaptureBounds.GetSize();
-	const float WorldUnitsPerPixelX = WorldBoundsSize.X / Settings.OutputWidth;
-	const float WorldUnitsPerPixelY = WorldBoundsSize.Y / Settings.OutputHeight;
-	const float TileWorldWidth = Settings.TileResolution * WorldUnitsPerPixelX;
-	const float TileWorldHeight = Settings.TileResolution * WorldUnitsPerPixelY;
-	const float StepWorldX = (Settings.TileResolution - Settings.TileOverlap) * WorldUnitsPerPixelX;
-	const float StepWorldY = (Settings.TileResolution - Settings.TileOverlap) * WorldUnitsPerPixelY;
+	// =================== CRITICAL FIX STARTS HERE ===================
 
-	const FVector TileCenterLocation = Settings.CaptureBounds.Min + FVector(
-		TileX * StepWorldX + TileWorldWidth * 0.5f,
-		TileY * StepWorldY + TileWorldHeight * 0.5f,
+	// 1. Calculate the consistent World Units Per Pixel (WUPP)
+	// We use the maximum dimension of the World Bounds and the Output Resolution to get a single, 
+	// non-stretched WUPP value. This ensures 1 pixel is always the same world distance.
+	const FVector WorldBoundsSize = Settings.CaptureBounds.GetSize();
+	const float MapWorldMaxDim = FMath::Max(WorldBoundsSize.X, WorldBoundsSize.Y);
+	const int32 MapOutputMaxDim = FMath::Max(Settings.OutputWidth, Settings.OutputHeight);
+	
+	// WUPP: The world distance of ONE PIXEL, consistent for both X and Y.
+	const float WorldUnitsPerPixel = MapWorldMaxDim / MapOutputMaxDim; 
+
+	// 2. Calculate the World Size of the TILE's capture area (TileOrthoSize)
+	// Since the Render Target is square, the world-capture area must also be square (OrthoWidth x OrthoWidth).
+	const float TileOrthoSize = Settings.TileResolution * WorldUnitsPerPixel; 
+
+	// 3. Calculate the world step size (distance between tile start points)
+	const float EffectiveTileRes = Settings.TileResolution - Settings.TileOverlap;
+	const float StepWorldX = EffectiveTileRes * WorldUnitsPerPixel;
+	const float StepWorldY = EffectiveTileRes * WorldUnitsPerPixel;
+
+	// 4. Calculate the Tile's Center Location in world coordinates
+	const FVector BoundsMin = Settings.CaptureBounds.Min;
+	const FVector TileCenterLocation = BoundsMin + FVector(
+		TileX * StepWorldX + TileOrthoSize * 0.5f,
+		TileY * StepWorldY + TileOrthoSize * 0.5f,
 		Settings.CameraHeight);
 
+	// 5. Configure the Capture Actor
 	ActiveCaptureActor->SetActorLocation(TileCenterLocation);
 	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D();
-	CaptureComponent->OrthoWidth = FMath::Max(TileWorldWidth, TileWorldHeight);
+	
+	// Set the OrthoWidth to the calculated square size of the tile's capture area
+	CaptureComponent->OrthoWidth = TileOrthoSize;
+	
+	// =================== CRITICAL FIX ENDS HERE ===================
 	
 	CaptureComponent->CaptureScene();
 
@@ -559,6 +645,8 @@ void UMinimapGeneratorManager::CaptureNextTile()
 		static_cast<float>(CurrentTileIndex) / (NumTilesX * NumTilesY), CurrentTileIndex, NumTilesX * NumTilesY);
 	GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimerForNextTick(this, &UMinimapGeneratorManager::OnTileRenderedAndContinue);
 }
+
+// ... (các hàm sau CaptureNextTile giữ nguyên) ...
 
 void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 {
@@ -577,18 +665,113 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 	
 	if (TilePixels.Num() > 0)
 	{
-		CapturedTileData.Add(FIntPoint(CurrentTileIndex % NumTilesX, CurrentTileIndex / NumTilesX), MoveTemp(TilePixels));
+		const int32 TileX = CurrentTileIndex % NumTilesX;
+		const int32 TileY = CurrentTileIndex / NumTilesX;
+
+		// =================== START OF MODIFICATION ===================
+		// If the user wants to save debug tiles, do it here.
+		if (Settings.bSaveTiles)
+		{
+			// Get the base filename without timestamp or extension
+			const FString BaseFileName = Settings.FileName;
+			if (Settings.bUseAutoFilename)
+			{
+				// In case auto-filename is used, we just use the base name without a timestamp for the tiles
+				// to keep it clean. You could add a timestamp here too if desired.
+			}
+			
+			SaveDebugTileImage(Settings.OutputPath, BaseFileName, TilePixels, TileX, TileY, Settings.TileResolution);
+		}
+		// =================== END OF MODIFICATION ===================
+		
+		CapturedTileData.Add(FIntPoint(TileX, TileY), MoveTemp(TilePixels));
 	}
 
 	CurrentTileIndex++;
 	CaptureNextTile();
 }
 
+// void UMinimapGeneratorManager::StartStitching()
+// {
+// 	UE_LOG(LogTemp, Log, TEXT("[%s::%s] - All tiles captured. Starting stitching process..."), *GetName(), *FString(__FUNCTION__));
+//
+// 	// Clean up capture actor and render target as they are no longer needed
+// 	if (ActiveCaptureActor.IsValid())
+// 	{
+// 		ActiveCaptureActor->Destroy();
+// 	}
+// 	ActiveCaptureActor.Reset();
+// 	ActiveRenderTarget.Reset();
+//
+// 	// Ensure there is data to stitch
+// 	if (CapturedTileData.Num() == 0)
+// 	{
+// 		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - No tile data was captured. Aborting stitching."), *GetName(), *FString(__FUNCTION__));
+// 		OnCaptureComplete.Broadcast(false, TEXT("No tile data was captured."));
+// 		return;
+// 	}
+// 	
+// 	// Pre-allocate memory for the final image to avoid reallocations
+// 	TArray<FColor> FinalImageData;
+// 	FinalImageData.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
+//
+// 	// The effective resolution of a tile when considering overlap (the distance to step to the next tile)
+// 	const int32 EffectiveTileRes = Settings.TileResolution - Settings.TileOverlap;
+//
+// 	// Iterate over every captured tile
+// 	for (const auto& TilePair : CapturedTileData)
+// 	{
+// 		const FIntPoint& TileCoord = TilePair.Key;
+// 		const TArray<FColor>& TilePixels = TilePair.Value;
+//
+// 		// Calculate the top-left starting position (in pixels) on the final canvas for this tile
+// 		const int32 CanvasStartX = TileCoord.X * EffectiveTileRes;
+// 		const int32 CanvasStartY = TileCoord.Y * EffectiveTileRes;
+//
+// 		// =================== START OF THE FIX ===================
+// 		// Pre-calculate the exact number of rows and columns to copy from this tile.
+// 		// This is the crucial change. For tiles at the right or bottom edge of the final image,
+// 		// we will only copy the portion that actually fits onto the canvas.
+// 		const int32 RowsToCopy = FMath::Min(Settings.TileResolution, Settings.OutputHeight - CanvasStartY);
+// 		const int32 ColsToCopy = FMath::Min(Settings.TileResolution, Settings.OutputWidth - CanvasStartX);
+// 		// ==================== END OF THE FIX ====================
+//
+// 		// Loop only over the valid region that needs to be copied
+// 		for (int32 y = 0; y < RowsToCopy; ++y)
+// 		{
+// 			for (int32 x = 0; x < ColsToCopy; ++x)
+// 			{
+// 				// Calculate the linear index for the source pixel data (from the tile)
+// 				const int32 SrcIndex = y * Settings.TileResolution + x;
+//
+// 				// Calculate the destination coordinates on the final canvas
+// 				const int32 CanvasX = CanvasStartX + x;
+// 				const int32 CanvasY = CanvasStartY + y;
+//
+// 				// Calculate the linear index for the destination pixel data (the final image)
+// 				const int32 DstIndex = CanvasY * Settings.OutputWidth + CanvasX;
+//
+// 				// Copy the pixel. No 'if' check is needed here because the loop bounds are already correct.
+// 				FinalImageData[DstIndex] = TilePixels[SrcIndex];
+// 			}
+// 		}
+// 	}
+// 	
+// 	// Clear the temporary tile data to free up memory
+// 	CapturedTileData.Empty();
+// 	
+// 	// Start the async task to save the final stitched image to disk
+// 	StartImageSaveTask(MoveTemp(FinalImageData), Settings.OutputWidth, Settings.OutputHeight);
+// }
+
+// MinimapGeneratorManager.cpp
+
+// ... (các hàm khác giữ nguyên) ...
+
 void UMinimapGeneratorManager::StartStitching()
 {
-	UE_LOG(LogTemp, Log, TEXT("[%s::%s] - All tiles captured. Starting stitching process..."), *GetName(), *FString(__FUNCTION__));
+	UE_LOG(LogTemp, Log, TEXT("[%s::%s] - All tiles captured. Starting final stitching process..."), *GetName(), *FString(__FUNCTION__));
 
-	// Clean up capture actor and render target as they are no longer needed
 	if (ActiveCaptureActor.IsValid())
 	{
 		ActiveCaptureActor->Destroy();
@@ -596,66 +779,76 @@ void UMinimapGeneratorManager::StartStitching()
 	ActiveCaptureActor.Reset();
 	ActiveRenderTarget.Reset();
 
-	// Ensure there is data to stitch
 	if (CapturedTileData.Num() == 0)
 	{
 		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - No tile data was captured. Aborting stitching."), *GetName(), *FString(__FUNCTION__));
 		OnCaptureComplete.Broadcast(false, TEXT("No tile data was captured."));
 		return;
 	}
-	
-	// Pre-allocate memory for the final image to avoid reallocations
-	TArray<FColor> FinalImageData;
-	FinalImageData.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
 
-	// The effective resolution of a tile when considering overlap (the distance to step to the next tile)
+	TArray<FColor> FinalImageData;
+	// Initialize with a known color (like transparent) in case some pixels are missed, although the new logic should be exhaustive.
+	FinalImageData.Init(FColor::Transparent, Settings.OutputWidth * Settings.OutputHeight);
+
 	const int32 EffectiveTileRes = Settings.TileResolution - Settings.TileOverlap;
 
-	// Iterate over every captured tile
+	// Iterate over each captured tile
 	for (const auto& TilePair : CapturedTileData)
 	{
 		const FIntPoint& TileCoord = TilePair.Key;
 		const TArray<FColor>& TilePixels = TilePair.Value;
 
-		// Calculate the top-left starting position (in pixels) on the final canvas for this tile
-		const int32 CanvasStartX = TileCoord.X * EffectiveTileRes;
-		const int32 CanvasStartY = TileCoord.Y * EffectiveTileRes;
-
-		// =================== START OF THE FIX ===================
-		// Pre-calculate the exact number of rows and columns to copy from this tile.
-		// This is the crucial change. For tiles at the right or bottom edge of the final image,
-		// we will only copy the portion that actually fits onto the canvas.
-		const int32 RowsToCopy = FMath::Min(Settings.TileResolution, Settings.OutputHeight - CanvasStartY);
-		const int32 ColsToCopy = FMath::Min(Settings.TileResolution, Settings.OutputWidth - CanvasStartX);
-		// ==================== END OF THE FIX ====================
-
-		// Loop only over the valid region that needs to be copied
-		for (int32 y = 0; y < RowsToCopy; ++y)
+		// =================== START OF THE FINAL FIX ===================
+		// We will now iterate through every pixel of the SOURCE tile
+		// and calculate its final destination pixel coordinate directly.
+		
+		for (int32 y = 0; y < Settings.TileResolution; ++y)
 		{
-			for (int32 x = 0; x < ColsToCopy; ++x)
+			// 1. Calculate the absolute Y pixel coordinate on a non-inverted canvas
+			const int32 AbsoluteY = (TileCoord.Y * EffectiveTileRes) + y;
+			
+			// 2. Invert the Y coordinate to match image space (top-down)
+			const int32 CanvasY = Settings.OutputHeight - 1 - AbsoluteY;
+
+			// 3. Early exit if the entire row is off the final canvas
+			if (CanvasY < 0 || CanvasY >= Settings.OutputHeight)
 			{
-				// Calculate the linear index for the source pixel data (from the tile)
+				continue;
+			}
+			
+			for (int32 x = 0; x < Settings.TileResolution; ++x)
+			{
+				// 1. Calculate the absolute X pixel coordinate
+				const int32 AbsoluteX = (TileCoord.X * EffectiveTileRes) + x;
+
+				// 2. X coordinate does not need to be inverted
+				const int32 CanvasX = AbsoluteX;
+
+				// 3. Early exit if the pixel is off the final canvas
+				if (CanvasX < 0 || CanvasX >= Settings.OutputWidth)
+				{
+					continue;
+				}
+
+				// 4. Calculate source and destination indices and copy the pixel
 				const int32 SrcIndex = y * Settings.TileResolution + x;
-
-				// Calculate the destination coordinates on the final canvas
-				const int32 CanvasX = CanvasStartX + x;
-				const int32 CanvasY = CanvasStartY + y;
-
-				// Calculate the linear index for the destination pixel data (the final image)
 				const int32 DstIndex = CanvasY * Settings.OutputWidth + CanvasX;
 
-				// Copy the pixel. No 'if' check is needed here because the loop bounds are already correct.
-				FinalImageData[DstIndex] = TilePixels[SrcIndex];
+				// Check indices just to be safe, though the logic should prevent out-of-bounds
+				if (FinalImageData.IsValidIndex(DstIndex) && TilePixels.IsValidIndex(SrcIndex))
+				{
+					FinalImageData[DstIndex] = TilePixels[SrcIndex];
+				}
 			}
 		}
+		// ==================== END OF THE FINAL FIX ====================
 	}
-	
-	// Clear the temporary tile data to free up memory
+
 	CapturedTileData.Empty();
-	
-	// Start the async task to save the final stitched image to disk
 	StartImageSaveTask(MoveTemp(FinalImageData), Settings.OutputWidth, Settings.OutputHeight);
 }
+
+// ... (các hàm khác giữ nguyên) ...
 
 void UMinimapGeneratorManager::CaptureTileWithScreenshot()
 {

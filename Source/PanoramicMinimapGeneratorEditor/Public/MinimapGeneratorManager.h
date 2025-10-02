@@ -39,6 +39,10 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
 	int32 TileOverlap = 64; // in pixels
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debugging", meta = (
+	EditCondition = "bUseTiling", Tooltip = "If checked, saves each captured tile as a separate image for debugging the stitching process."))
+	bool bSaveTiles = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (
 	Tooltip = "If checked, forces cinematic-quality post-processing. If unchecked (default), uses the current editor viewport scalability settings for better performance."))
 	bool bOverrideWithHighQualitySettings = false;
