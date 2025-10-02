@@ -150,6 +150,20 @@ private:
 	// New function to check streaming status and trigger capture
 	void CheckStreamingAndCapture();
 
+	// === THÊM HÀM VÀ BIẾN MỚI CHO ASYNC READBACK ===
+	/** Được gọi bởi Timer để kiểm tra xem GPU đã đọc xong pixel chưa */
+	void CheckReadbackStatus();
+
+	/** Hàng rào để đồng bộ với Rendering Thread */
+	FRenderCommandFence ReadbackFence;
+
+	/** Timer để "hỏi thăm" trạng thái của Fence */
+	FTimerHandle ReadbackPollTimer;
+
+	/** Buffer tạm thời để Rendering Thread ghi dữ liệu pixel vào */
+	TArray<FColor> StagingPixelBuffer;
+	// ===========================================
+
 	// Handle to the timer that polls streaming completion
 	FTimerHandle StreamingCheckTimer;
 
@@ -170,7 +184,6 @@ private:
 	void StartStitching();
 	
 	void CaptureTileWithScreenshot();
-	void OnScreenshotCaptured(int32 Width, int32 Height, const TArray<FColor>& PixelData);
 
 	FIntPoint CurrentCaptureTilePosition;
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
