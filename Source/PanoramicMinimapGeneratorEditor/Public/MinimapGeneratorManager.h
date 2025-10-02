@@ -144,12 +144,7 @@ private:
 
 	/** Tạo tên file cuối cùng và khởi động AsyncTask để lưu ảnh. */
 	void StartImageSaveTask(TArray<FColor> PixelData, int32 ImageWidth, int32 ImageHeight);
-
-	// The main function to drive the process
-	void ProcessNextTile();
-	// New function to check streaming status and trigger capture
-	void CheckStreamingAndCapture();
-
+	
 	// === THÊM HÀM VÀ BIẾN MỚI CHO ASYNC READBACK ===
 	/** Được gọi bởi Timer để kiểm tra xem GPU đã đọc xong pixel chưa */
 	void CheckReadbackStatus();
@@ -183,8 +178,6 @@ private:
 	void OnTileRenderedAndContinue();
 	void StartStitching();
 	
-	void CaptureTileWithScreenshot();
-
 	FIntPoint CurrentCaptureTilePosition;
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
 
