@@ -66,8 +66,18 @@ private:
 	TSharedPtr<SSpinBox<float>> BoundsMaxX, BoundsMaxY, BoundsMaxZ;
 
 	// Output Settings
-	TSharedPtr<SSpinBox<int32>> OutputWidth;
-	TSharedPtr<SSpinBox<int32>> OutputHeight;
+	TArray<TSharedPtr<int32>> ResolutionOptions;
+	TSharedPtr<SComboBox<TSharedPtr<int32>>> OutputWidthComboBox;
+	TSharedPtr<SComboBox<TSharedPtr<int32>>> OutputHeightComboBox;
+	TSharedPtr<int32> CurrentOutputWidth;
+	TSharedPtr<int32> CurrentOutputHeight;
+	void OnOutputWidthChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo);
+	void OnOutputHeightChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo);
+	
+	TSharedPtr<SCheckBox> ImportAsAssetCheckbox;
+	TSharedPtr<SEditableTextBox> AssetPathTextBox;
+	EVisibility GetAssetPathVisibility() const;
+	
 	TSharedPtr<SEditableTextBox> OutputPath;
 	TSharedPtr<SEditableTextBox> FileName;
 	TSharedPtr<SCheckBox> AutoFilenameCheckbox;

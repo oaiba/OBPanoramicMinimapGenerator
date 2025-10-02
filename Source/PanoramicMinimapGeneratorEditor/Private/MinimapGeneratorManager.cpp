@@ -15,8 +15,10 @@
 #include "Engine/SceneCapture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
-// ADD THIS NEW CLASS AT THE TOP OF YOUR .CPP FILE
+#include "AssetToolsModule.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
+#include "Factories/TextureFactory.h"
 
 // AsyncTask to save image data to disk on a background thread
 class FSaveImageTask : public FNonAbandonableTask
@@ -99,7 +101,7 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	ProcessNextTile();
 }
 
-void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath)
+void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath) const
 {
 	if (bSuccess)
 	{
@@ -111,6 +113,69 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 	}
 	// Broadcast delegate mới thay vì OnProgress
 	OnCaptureComplete.Broadcast(bSuccess, SavedImagePath);
+
+	// Chỉ thực hiện import nếu thành công và người dùng đã chọn tùy chọn này
+	if (bSuccess && Settings.bImportAsTextureAsset && !SavedImagePath.IsEmpty())
+	{
+		// --- BẮT ĐẦU LOGIC TẠO ASSET MỚI ---
+		// FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+
+		const FString AssetName = TEXT("T_") + FPaths::GetBaseFilename(SavedImagePath);
+		FString PackagePath = Settings.AssetPath;
+		if (!PackagePath.EndsWith(TEXT("/")))
+		{
+			PackagePath += TEXT("/");
+		}
+		const FString FullAssetPath = PackagePath + AssetName;
+
+		UPackage* Package = CreatePackage(*FullAssetPath);
+		Package->FullyLoad();
+
+		TArray<uint8> PngData;
+		if (!FFileHelper::LoadFileToArray(PngData, *SavedImagePath))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to load saved PNG file from disk: %s"), *SavedImagePath);
+			return;
+		}
+
+		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(
+			FName("ImageWrapper"));
+
+		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+			ImageWrapper.IsValid() && ImageWrapper->SetCompressed(PngData.GetData(), PngData.Num()))
+		{
+			if (TArray<uint8> UncompressedBGRA; ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
+			{
+				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *AssetName, RF_Public | RF_Standalone);
+				NewTexture->AddToRoot();
+
+				NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8,
+										UncompressedBGRA.GetData());
+				NewTexture->SRGB = true;
+				NewTexture->CompressionSettings = TC_Default;
+				NewTexture->UpdateResource();
+				// Package->MarkPackageDirty();
+
+				// SỬA LỖI 1: Load module AssetRegistry trước khi sử dụng
+				FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+					TEXT("AssetRegistry"));
+				AssetRegistryModule.AssetCreated(NewTexture);
+
+				UE_LOG(LogTemp, Log, TEXT("Successfully created texture asset: %s"), *FullAssetPath);
+
+				// SỬA LỖI 2: Tạo TArray tường minh để tránh lỗi ambiguous call
+				TArray<UObject*> AssetsToSync;
+				AssetsToSync.Add(NewTexture);
+				GEditor->SyncBrowserToObjects(AssetsToSync);
+
+				NewTexture->RemoveFromRoot();
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("Failed to decode PNG data from file: %s"), *SavedImagePath);
+		}
+	}
 }
 
 void UMinimapGeneratorManager::StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings)

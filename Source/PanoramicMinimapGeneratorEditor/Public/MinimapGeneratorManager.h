@@ -77,6 +77,12 @@ struct FMinimapCaptureSettings
 	Tooltip = "If checked, automatically appends a timestamp (_DD_MM_HH_mm) to the filename."))
 	bool bUseAutoFilename = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output|Import")
+	bool bImportAsTextureAsset = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output|Import", meta = (EditCondition = "bImportAsTextureAsset"))
+	FString AssetPath = TEXT("/Game/Minimaps/");
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
 	EMinimapBackgroundMode BackgroundMode = EMinimapBackgroundMode::SolidColor;
 
@@ -111,7 +117,7 @@ public:
 	void OnTileCaptureCompleted(int32 TileX, int32 TileY, TArray<FColor> PixelData);
 	
 	// Callback function when the async save task is complete
-	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath);
+	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath) const;
 private:
 	// Main steps of the process
 	void CalculateGrid();

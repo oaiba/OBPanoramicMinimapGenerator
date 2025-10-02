@@ -48,6 +48,15 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 		CurrentCaptureSource = CaptureSourceOptions[4]; // Default to SCS_FinalColorHDR
 	}
 
+	for (int32 i = 5; i <= 14; ++i) // 2^5=32, 2^14=16384
+	{
+		ResolutionOptions.Add(MakeShared<int32>(1 << i));
+	}
+
+	// Đặt giá trị mặc định là 4096 (2^12)
+	CurrentOutputWidth = ResolutionOptions[7];
+	CurrentOutputHeight = ResolutionOptions[7];
+
 	// === BẮT ĐẦU CẤU TRÚC LAYOUT MỚI ===
 	ChildSlot
 	[
@@ -323,27 +332,45 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					.BodyContent()
 					[
 						SNew(SGridPanel).FillColumn(1, 1.0f)
-						+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("OutputWidthLabel", "Output Width"))
 						]
-						+ SGridPanel::Slot(1, 0)
-						[
-							SAssignNew(OutputWidth, SSpinBox<int32>).MinValue(256).MaxValue(16384).Value(4096)
-						]
-						+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
-						[
-							SNew(STextBlock).Text(LOCTEXT("OutputHeightLabel", "Output Height"))
-						]
 						+ SGridPanel::Slot(1, 1)
 						[
-							SAssignNew(OutputHeight, SSpinBox<int32>).MinValue(256).MaxValue(16384).Value(4096)
+							SAssignNew(OutputWidthComboBox, SComboBox<TSharedPtr<int32>>)
+							.OptionsSource(&ResolutionOptions)
+							.OnSelectionChanged(this, &SMinimapGeneratorWindow::OnOutputWidthChanged)
+							.OnGenerateWidget_Lambda([](const TSharedPtr<int32>& InOption)
+							{
+								return SNew(STextBlock).Text(FText::AsNumber(*InOption));
+							})
+							[
+								SNew(STextBlock).Text_Lambda([this] { return FText::AsNumber(*CurrentOutputWidth); })
+							]
 						]
 						+ SGridPanel::Slot(0, 2).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
-							SNew(STextBlock).Text(LOCTEXT("OutputPathLabel", "Output Path"))
+							SNew(STextBlock).Text(LOCTEXT("OutputHeightLabel", "Output Height"))
 						]
 						+ SGridPanel::Slot(1, 2)
+						[
+							SAssignNew(OutputHeightComboBox, SComboBox<TSharedPtr<int32>>)
+							.OptionsSource(&ResolutionOptions)
+							.OnSelectionChanged(this, &SMinimapGeneratorWindow::OnOutputHeightChanged)
+							.OnGenerateWidget_Lambda([](const TSharedPtr<int32>& InOption)
+							{
+								return SNew(STextBlock).Text(FText::AsNumber(*InOption));
+							})
+							[
+								SNew(STextBlock).Text_Lambda([this] { return FText::AsNumber(*CurrentOutputHeight); })
+							]
+						]
+						+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("OutputPathLabel", "Output Path"))
+						]
+						+ SGridPanel::Slot(1, 3)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().FillWidth(1.0f)
@@ -356,15 +383,15 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									this, &SMinimapGeneratorWindow::OnBrowseButtonClicked)
 							]
 						]
-						+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 4).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("FileNameLabel", "File Name"))
 						]
-						+ SGridPanel::Slot(1, 3)
+						+ SGridPanel::Slot(1, 4)
 						[
 							SAssignNew(FileName, SEditableTextBox).Text(LOCTEXT("DefaultFileName", "Minimap_Result"))
 						]
-						+ SGridPanel::Slot(1, 4)
+						+ SGridPanel::Slot(1, 5)
 						[
 							SAssignNew(AutoFilenameCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
 							[
@@ -372,11 +399,31 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 															  "Auto-Generate Filename with Timestamp"))
 							]
 						]
-						+ SGridPanel::Slot(0, 5).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(1, 6) // <<-- Đây là slot mới cho Checkbox
+						[
+							SAssignNew(ImportAsAssetCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
+							[
+								SNew(STextBlock).Text(LOCTEXT("ImportAsAssetLabel", "Import as Texture Asset"))
+							]
+						]
+						+ SGridPanel::Slot(0, 7).HAlign(HAlign_Right).Padding(LabelPadding)
+						// <<-- Slot mới cho nhãn Path
+						[
+							SNew(STextBlock)
+							.Text(LOCTEXT("AssetPathLabel", "Asset Path"))
+							.Visibility(this, &SMinimapGeneratorWindow::GetAssetPathVisibility)
+						]
+						+ SGridPanel::Slot(1, 7) // <<-- Slot mới cho TextBox Path
+						[
+							SAssignNew(AssetPathTextBox, SEditableTextBox)
+							.Text(FText::FromString(TEXT("/Game/Minimaps/")))
+							.Visibility(this, &SMinimapGeneratorWindow::GetAssetPathVisibility)
+						]
+						+ SGridPanel::Slot(0, 8).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("BackgroundModeLabel", "Background Mode"))
 						]
-						+ SGridPanel::Slot(1, 5)
+						+ SGridPanel::Slot(1, 8)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)
@@ -404,7 +451,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								]
 							]
 						]
-						+ SGridPanel::Slot(1, 6).Padding(0, 5, 0, 5)
+						+ SGridPanel::Slot(1, 9).Padding(0, 5, 0, 5)
 						[
 							SNew(SColorBlock)
 							.Color(this, &SMinimapGeneratorWindow::GetSelectedBackgroundColor)
@@ -536,6 +583,21 @@ void SMinimapGeneratorWindow::OnCaptureSourceChanged(TSharedPtr<FString> NewSele
 	}
 }
 
+void SMinimapGeneratorWindow::OnOutputWidthChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo)
+{
+	if (NewSelection.IsValid()) CurrentOutputWidth = NewSelection;
+}
+
+void SMinimapGeneratorWindow::OnOutputHeightChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo)
+{
+	if (NewSelection.IsValid()) CurrentOutputHeight = NewSelection;
+}
+
+EVisibility SMinimapGeneratorWindow::GetAssetPathVisibility() const
+{
+	return ImportAsAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 {
 	UE_LOG(LogTemp, Log, TEXT("Start Capture button clicked."));
@@ -548,8 +610,8 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		FVector(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue()),
 		FVector(BoundsMaxX->GetValue(), BoundsMaxY->GetValue(), BoundsMaxZ->GetValue())
 	);
-	Settings.OutputWidth = OutputWidth->GetValue();
-	Settings.OutputHeight = OutputHeight->GetValue();
+	Settings.OutputWidth = *CurrentOutputWidth;
+	Settings.OutputHeight = *CurrentOutputHeight;
 	Settings.OutputPath = OutputPath->GetText().ToString();
 	Settings.FileName = FileName->GetText().ToString();
 	Settings.BackgroundMode = CurrentBackgroundMode;
@@ -558,6 +620,11 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		Settings.BackgroundColor = SelectedBackgroundColor;
 	}
 	Settings.bUseAutoFilename = AutoFilenameCheckbox->IsChecked();
+	Settings.bImportAsTextureAsset = ImportAsAssetCheckbox->IsChecked();
+	if(Settings.bImportAsTextureAsset)
+	{
+		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
+	}
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
 	Settings.CameraHeight = CameraHeight->GetValue();
