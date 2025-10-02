@@ -100,7 +100,7 @@ struct FMinimapCaptureSettings
 
 	// FILTERING
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering")
-	TEnumAsByte<ESceneCapturePrimitiveRenderMode> PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_RenderScenePrimitives;
+	ESceneCapturePrimitiveRenderMode PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_RenderScenePrimitives;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering", meta = (EditCondition = "PrimitiveRenderMode == ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList"))
 	TArray<TSoftObjectPtr<AActor>> ShowOnlyActors;

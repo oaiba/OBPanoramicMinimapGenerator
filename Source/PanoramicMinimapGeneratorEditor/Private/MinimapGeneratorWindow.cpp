@@ -888,7 +888,8 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList()
 				{
 					ExistingActorLabels.Add(ActorLabel);
 					ShowOnlyActorNames.Add(MakeShared<FString>(ActorLabel));
-					Settings.ShowOnlyActors.Add(Actor); // Đã đảm bảo không trùng, có thể dùng Add()
+					const FSoftObjectPath ActorPath(Actor);
+					Settings.ShowOnlyActors.Add(TSoftObjectPtr<AActor>(ActorPath));
 					bListChanged = true;
 				}
 			}
@@ -929,7 +930,8 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToHiddenList()
 				{
 					ExistingActorLabels.Add(ActorLabel);
 					HiddenActorNames.Add(MakeShared<FString>(ActorLabel));
-					Settings.HiddenActors.Add(Actor);
+					const FSoftObjectPath ActorPath(Actor);
+					Settings.HiddenActors.Add(TSoftObjectPtr<AActor>(ActorPath));
 					bListChanged = true;
 				}
 			}

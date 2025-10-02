@@ -20,7 +20,7 @@ class FSaveImageTask : public FNonAbandonableTask
 {
 public:
 	FSaveImageTask(TArray<FColor> InPixelData, const int32 InWidth, const int32 InHeight, FString InFullPath,
-				   const TWeakObjectPtr<UMinimapGeneratorManager> InManager)
+	               const TWeakObjectPtr<UMinimapGeneratorManager> InManager)
 		: PixelData(MoveTemp(InPixelData)), Width(InWidth), Height(InHeight), FullPath(MoveTemp(InFullPath)),
 		  ManagerPtr(InManager)
 	{
@@ -32,7 +32,7 @@ public:
 			FName("ImageWrapper"));
 		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
 			ImageWrapper.IsValid() && ImageWrapper->SetRaw(PixelData.GetData(), PixelData.Num() * sizeof(FColor), Width,
-														   Height, ERGBFormat::BGRA, 8))
+			                                               Height, ERGBFormat::BGRA, 8))
 		{
 			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr, bSuccess, Path = this->FullPath]
@@ -86,7 +86,7 @@ public:
 			FName("ImageWrapper"));
 		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
 			ImageWrapper.IsValid() && ImageWrapper->SetRaw(PixelData.GetData(), PixelData.Num() * sizeof(FColor), Width,
-														   Height, ERGBFormat::BGRA, 8))
+			                                               Height, ERGBFormat::BGRA, 8))
 		{
 			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
 
@@ -128,7 +128,7 @@ protected:
 
 // Helper function to start the debug tile saving task
 void SaveDebugTileImage(const FString& BasePath, const FString& BaseFileName, const TArray<FColor>& PixelData,
-						const int32 TileX, const int32 TileY, int32 TileResolution)
+                        const int32 TileX, const int32 TileY, int32 TileResolution)
 {
 	// Create a descriptive filename for the debug tile, e.g., "Minimap_Result_Tile_0_1.png"
 	const FString DebugFileName = FString::Printf(TEXT("%s_Tile_%d_%d.png"), *BaseFileName, TileX, TileY);
@@ -200,11 +200,11 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 			if (TArray<uint8> UncompressedBGRA; ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
 			{
 				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *FPaths::GetBaseFilename(SavedImagePath),
-															   RF_Public | RF_Standalone);
+				                                               RF_Public | RF_Standalone);
 				NewTexture->AddToRoot();
 
 				NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8,
-										UncompressedBGRA.GetData());
+				                        UncompressedBGRA.GetData());
 				NewTexture->SRGB = true;
 				NewTexture->CompressionSettings = TC_Default;
 				NewTexture->UpdateResource();
@@ -306,6 +306,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	TArray<AActor*> FinalShowList;
 	BuildFinalShowOnlyList(FinalShowList);
 
+	// CaptureComponent->ShowFlags = FEngineShowFlags(ESFIM_Editor);
 	CaptureComponent->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
 	CaptureComponent->ShowOnlyActors = FinalShowList;
 	CaptureComponent->HiddenActors.Empty();
@@ -316,7 +317,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	CaptureComponent->TextureTarget = RenderTarget;
 	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
-	CaptureComponent->CompositeMode = SCCM_Additive;
+	CaptureComponent->CompositeMode = SCCM_Overwrite;
 
 	if (Settings.bOverrideWithHighQualitySettings)
 	{
@@ -372,13 +373,15 @@ void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 				FIntRect(0, 0, RenderTargetResource->GetSizeX(), RenderTargetResource->GetSizeY()),
 				*PixelBuffer, ReadPixelFlags);
 
-			Fence->BeginFence();
+			// Fence->BeginFence();
 		}
 	);
 
+	ReadbackFence.BeginFence();
+
 	const UWorld* World = GEditor->GetEditorWorldContext().World();
 	World->GetTimerManager().SetTimer(ReadbackPollTimer, this, &UMinimapGeneratorManager::CheckReadbackStatus, 0.1f,
-									  true);
+	                                  true);
 
 	OnProgress.Broadcast(FText::FromString(TEXT("GPU is rendering... Editor remains responsive.")), 0.5f, 0, 0);
 }
@@ -539,13 +542,13 @@ void UMinimapGeneratorManager::CalculateGrid()
 	}
 
 	NumTilesX = (Settings.OutputWidth <= Settings.TileResolution)
-					? 1
-					: (1 + FMath::CeilToInt(
-						static_cast<float>(Settings.OutputWidth - Settings.TileResolution) / EffectiveTileRes));
+		            ? 1
+		            : (1 + FMath::CeilToInt(
+			            static_cast<float>(Settings.OutputWidth - Settings.TileResolution) / EffectiveTileRes));
 	NumTilesY = (Settings.OutputHeight <= Settings.TileResolution)
-					? 1
-					: (1 + FMath::CeilToInt(
-						static_cast<float>(Settings.OutputHeight - Settings.TileResolution) / EffectiveTileRes));
+		            ? 1
+		            : (1 + FMath::CeilToInt(
+			            static_cast<float>(Settings.OutputHeight - Settings.TileResolution) / EffectiveTileRes));
 	UE_LOG(LogTemp, Log, TEXT("Calculated Grid: %d x %d tiles"), NumTilesX, NumTilesY);
 }
 
@@ -606,14 +609,21 @@ void UMinimapGeneratorManager::CaptureNextTile()
 
 	OnProgress.Broadcast(
 		FText::Format(FText::FromString("Capturing tile {0}/{1}..."), FText::AsNumber(CurrentTileIndex + 1),
-					  FText::AsNumber(NumTilesX * NumTilesY)),
+		              FText::AsNumber(NumTilesX * NumTilesY)),
 		CurrentProgress * 0.9f,
 		CurrentTileIndex,
 		NumTilesX * NumTilesY
 	);
 
-	GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimerForNextTick(
-		this, &UMinimapGeneratorManager::OnTileRenderedAndContinue);
+	// GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimerForNextTick(
+	// 	this, &UMinimapGeneratorManager::OnTileRenderedAndContinue);
+
+	if (const UWorld* World = GEditor->GetEditorWorldContext().World())
+	{
+		FTimerHandle TempHandle;
+		World->GetTimerManager().SetTimer(
+			TempHandle, this, &UMinimapGeneratorManager::OnTileRenderedAndContinue, 0.2f, false);
+	}
 }
 
 void UMinimapGeneratorManager::OnTileRenderedAndContinue()
@@ -680,8 +690,8 @@ void UMinimapGeneratorManager::StartStitching()
 	FinalImageData.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
 	// Initialize the final image with background color for proper blending
 	const FColor BackgroundColor = (Settings.BackgroundMode == EMinimapBackgroundMode::Transparent)
-									   ? FColor::Transparent
-									   : Settings.BackgroundColor.ToFColor(true);
+		                               ? FColor::Transparent
+		                               : Settings.BackgroundColor.ToFColor(true);
 	for (int32 i = 0; i < FinalImageData.Num(); ++i)
 	{
 		FinalImageData[i] = BackgroundColor;
@@ -782,7 +792,7 @@ void UMinimapGeneratorManager::StartStitching()
 void UMinimapGeneratorManager::OnAllTasksCompleted()
 {
 	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - All tiles captured. Starting stitching process."), *GetName(),
-		   *FString(__FUNCTION__));
+	       *FString(__FUNCTION__));
 
 	if (ScreenshotCapturedDelegateHandle.IsValid())
 	{
@@ -800,7 +810,7 @@ bool UMinimapGeneratorManager::SaveFinalImage(const TArray<FColor>& ImageData, i
 	const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
 
 	if (!ImageWrapper.IsValid() || !ImageWrapper->SetRaw(ImageData.GetData(), ImageData.Num() * sizeof(FColor), Width,
-														 Height, ERGBFormat::BGRA, 8))
+	                                                     Height, ERGBFormat::BGRA, 8))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Failed to set raw image data for PNG wrapper."));
 		return false;
