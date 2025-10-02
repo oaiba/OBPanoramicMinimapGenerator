@@ -768,9 +768,13 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 
 // ... (các hàm khác giữ nguyên) ...
 
+// In MinimapGeneratorManager.cpp
+
+// In MinimapGeneratorManager.cpp
+
 void UMinimapGeneratorManager::StartStitching()
 {
-	UE_LOG(LogTemp, Log, TEXT("[%s::%s] - All tiles captured. Starting final stitching process..."), *GetName(), *FString(__FUNCTION__));
+	UE_LOG(LogTemp, Log, TEXT("All tiles captured. Starting stitching process..."));
 
 	if (ActiveCaptureActor.IsValid())
 	{
@@ -781,74 +785,112 @@ void UMinimapGeneratorManager::StartStitching()
 
 	if (CapturedTileData.Num() == 0)
 	{
-		UE_LOG(LogTemp, Error, TEXT("[%s::%s] - No tile data was captured. Aborting stitching."), *GetName(), *FString(__FUNCTION__));
+		UE_LOG(LogTemp, Error, TEXT("No tile data was captured. Aborting stitching."));
 		OnCaptureComplete.Broadcast(false, TEXT("No tile data was captured."));
 		return;
 	}
 
 	TArray<FColor> FinalImageData;
-	// Initialize with a known color (like transparent) in case some pixels are missed, although the new logic should be exhaustive.
-	FinalImageData.Init(FColor::Transparent, Settings.OutputWidth * Settings.OutputHeight);
+	FinalImageData.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
+	// Khởi tạo ảnh cuối cùng với màu nền để việc blending hoạt động chính xác
+	const FColor BackgroundColor = (Settings.BackgroundMode == EMinimapBackgroundMode::Transparent) ? FColor::Transparent : Settings.BackgroundColor.ToFColor(true);
+	for(int32 i = 0; i < FinalImageData.Num(); ++i)
+	{
+		FinalImageData[i] = BackgroundColor;
+	}
+
 
 	const int32 EffectiveTileRes = Settings.TileResolution - Settings.TileOverlap;
+	const bool bIsPortrait = Settings.OutputHeight > Settings.OutputWidth;
 
-	// Iterate over each captured tile
-	for (const auto& TilePair : CapturedTileData)
+	// Sắp xếp các tile theo thứ tự từ trái sang phải, từ trên xuống dưới để đảm bảo blending đúng
+	TArray<FIntPoint> SortedTileCoords;
+	CapturedTileData.GetKeys(SortedTileCoords);
+	SortedTileCoords.Sort([](const FIntPoint& A, const FIntPoint& B)
 	{
-		const FIntPoint& TileCoord = TilePair.Key;
-		const TArray<FColor>& TilePixels = TilePair.Value;
+		if (A.Y != B.Y) return A.Y < B.Y;
+		return A.X < B.X;
+	});
 
-		// =================== START OF THE FINAL FIX ===================
-		// We will now iterate through every pixel of the SOURCE tile
-		// and calculate its final destination pixel coordinate directly.
-		
+	for (const FIntPoint& TileCoord : SortedTileCoords)
+	{
+		const TArray<FColor>& TilePixels = CapturedTileData[TileCoord];
+		const int32 CanvasStartX = TileCoord.X * EffectiveTileRes;
+		const int32 CanvasStartY = TileCoord.Y * EffectiveTileRes;
+
 		for (int32 y = 0; y < Settings.TileResolution; ++y)
 		{
-			// 1. Calculate the absolute Y pixel coordinate on a non-inverted canvas
-			const int32 AbsoluteY = (TileCoord.Y * EffectiveTileRes) + y;
-			
-			// 2. Invert the Y coordinate to match image space (top-down)
-			const int32 CanvasY = Settings.OutputHeight - 1 - AbsoluteY;
-
-			// 3. Early exit if the entire row is off the final canvas
-			if (CanvasY < 0 || CanvasY >= Settings.OutputHeight)
-			{
-				continue;
-			}
-			
 			for (int32 x = 0; x < Settings.TileResolution; ++x)
 			{
-				// 1. Calculate the absolute X pixel coordinate
-				const int32 AbsoluteX = (TileCoord.X * EffectiveTileRes) + x;
+				const int32 SrcIndex = y * Settings.TileResolution + x;
+				const FColor& SrcPixelColor = TilePixels[SrcIndex];
 
-				// 2. X coordinate does not need to be inverted
-				const int32 CanvasX = AbsoluteX;
-
-				// 3. Early exit if the pixel is off the final canvas
-				if (CanvasX < 0 || CanvasX >= Settings.OutputWidth)
+				int32 DstX_on_Canvas, DstY_on_Canvas;
+				if (bIsPortrait)
 				{
-					continue;
+					DstX_on_Canvas = CanvasStartX + (Settings.TileResolution - 1 - y);
+					DstY_on_Canvas = CanvasStartY + x;
+				}
+				else
+				{
+					DstX_on_Canvas = CanvasStartX + x;
+					DstY_on_Canvas = CanvasStartY + y;
 				}
 
-				// 4. Calculate source and destination indices and copy the pixel
-				const int32 SrcIndex = y * Settings.TileResolution + x;
-				const int32 DstIndex = CanvasY * Settings.OutputWidth + CanvasX;
-
-				// Check indices just to be safe, though the logic should prevent out-of-bounds
-				if (FinalImageData.IsValidIndex(DstIndex) && TilePixels.IsValidIndex(SrcIndex))
+				if (DstX_on_Canvas >= 0 && DstX_on_Canvas < Settings.OutputWidth &&
+					DstY_on_Canvas >= 0 && DstY_on_Canvas < Settings.OutputHeight)
 				{
-					FinalImageData[DstIndex] = TilePixels[SrcIndex];
+					const int32 DstIndex = DstY_on_Canvas * Settings.OutputWidth + DstX_on_Canvas;
+
+					// === BẮT ĐẦU LOGIC BLENDING ===
+					float BlendAlphaX = 1.0f;
+					float BlendAlphaY = 1.0f;
+
+					// Tính hệ số blend cho trục X (vùng chồng lấn bên trái)
+					if (TileCoord.X > 0 && x < Settings.TileOverlap)
+					{
+						BlendAlphaX = static_cast<float>(x) / FMath::Max(1, Settings.TileOverlap - 1);
+					}
+
+					// Tính hệ số blend cho trục Y (vùng chồng lấn bên trên)
+					if (TileCoord.Y > 0 && y < Settings.TileOverlap)
+					{
+						BlendAlphaY = static_cast<float>(y) / FMath::Max(1, Settings.TileOverlap - 1);
+					}
+
+					// Chọn hệ số blend nhỏ nhất để tạo ra đường chéo mượt mà ở các góc
+					const float FinalBlendAlpha = FMath::Min(BlendAlphaX, BlendAlphaY);
+
+					if (FinalBlendAlpha < 1.0f)
+					{
+						// === BẮT ĐẦU LOGIC BLENDING ĐÃ SỬA LỖI ===
+						// 1. Lấy màu đã có sẵn ở vị trí đích
+						const FColor& DstPixelColor = FinalImageData[DstIndex];
+
+						// 2. Chuyển đổi cả hai màu FColor sang FLinearColor
+						const FLinearColor DstLinear = DstPixelColor; // Tự động chuyển đổi
+						const FLinearColor SrcLinear = SrcPixelColor; // Tự động chuyển đổi
+
+						// 3. Thực hiện Lerp trong không gian Linear (dùng HSV để có màu đẹp hơn)
+						const FLinearColor BlendedLinear = FLinearColor::LerpUsingHSV(DstLinear, SrcLinear, FinalBlendAlpha);
+						
+						// 4. Chuyển đổi kết quả về lại FColor và ghi vào ảnh
+						FinalImageData[DstIndex] = BlendedLinear.ToFColor(true);
+						// === KẾT THÚC LOGIC BLENDING ĐÃ SỬA LỖI ===
+					}
+					else
+					{
+						FinalImageData[DstIndex] = SrcPixelColor;
+					}
+					// === KẾT THÚC LOGIC BLENDING ===
 				}
 			}
 		}
-		// ==================== END OF THE FINAL FIX ====================
 	}
 
 	CapturedTileData.Empty();
 	StartImageSaveTask(MoveTemp(FinalImageData), Settings.OutputWidth, Settings.OutputHeight);
 }
-
-// ... (các hàm khác giữ nguyên) ...
 
 void UMinimapGeneratorManager::CaptureTileWithScreenshot()
 {
