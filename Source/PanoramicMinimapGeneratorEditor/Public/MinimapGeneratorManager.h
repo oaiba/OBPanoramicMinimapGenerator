@@ -121,8 +121,6 @@ public:
 	// Delegate for UI updates
 	FOnMinimapProgress OnProgress;
 	FOnMinimapCaptureComplete OnCaptureComplete;
-
-	void OnTileCaptureCompleted(int32 TileX, int32 TileY, TArray<FColor> PixelData);
 	
 	// Callback function when the async save task is complete
 	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath) const;
