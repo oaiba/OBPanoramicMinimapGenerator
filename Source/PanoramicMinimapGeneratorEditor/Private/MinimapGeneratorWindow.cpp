@@ -338,14 +338,20 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							+ SVerticalBox::Slot().AutoHeight()
 							[
 								SNew(SBox)
-								.HeightOverride(150.0f) 
+								.HeightOverride(150.0f)
 								[
 									SAssignNew(ShowOnlyActorsListView, SListView<TSharedPtr<FString>>)
 									.ListItemsSource(&ShowOnlyActorNames)
-									.OnGenerateRow_Lambda([](const TSharedPtr<FString>& InItem, const TSharedRef<STableViewBase>& OwnerTable)
-									{
-										return SNew(STableRow<TSharedPtr<FString>>, OwnerTable) [ SNew(STextBlock).Text(FText::FromString(*InItem)) ];
-									})
+									.SelectionMode(ESelectionMode::Multi)
+									.OnGenerateRow_Lambda(
+										[](const TSharedPtr<FString>& InItem,
+										   const TSharedRef<STableViewBase>& OwnerTable)
+										{
+											return SNew(STableRow<TSharedPtr<FString>>, OwnerTable)
+												[
+													SNew(STextBlock).Text(FText::FromString(*InItem))
+												];
+										})
 								]
 							]
 							+ SVerticalBox::Slot().AutoHeight()
@@ -356,6 +362,12 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									SNew(SButton).Text(LOCTEXT("AddToShowOnly", "Add Selected")).OnClicked(
 										this, &SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList)
 								]
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("RemoveFromShowOnly", "Remove Selected")).OnClicked(
+										this, &SMinimapGeneratorWindow::OnRemoveSelectedFromShowOnlyList)
+								]
+
 								+ SHorizontalBox::Slot()
 								[
 									SNew(SButton).Text(LOCTEXT("ClearShowOnly", "Clear List")).OnClicked(
@@ -375,10 +387,16 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								[
 									SAssignNew(HiddenActorsListView, SListView<TSharedPtr<FString>>)
 									.ListItemsSource(&HiddenActorNames)
-									.OnGenerateRow_Lambda([](const TSharedPtr<FString>& InItem, const TSharedRef<STableViewBase>& OwnerTable)
-									{
-										return SNew(STableRow<TSharedPtr<FString>>, OwnerTable) [ SNew(STextBlock).Text(FText::FromString(*InItem)) ];
-									})
+									.SelectionMode(ESelectionMode::Multi)
+									.OnGenerateRow_Lambda(
+										[](const TSharedPtr<FString>& InItem,
+										   const TSharedRef<STableViewBase>& OwnerTable)
+										{
+											return SNew(STableRow<TSharedPtr<FString>>, OwnerTable)
+												[
+													SNew(STextBlock).Text(FText::FromString(*InItem))
+												];
+										})
 								]
 							]
 							+ SVerticalBox::Slot().AutoHeight()
@@ -388,6 +406,11 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								[
 									SNew(SButton).Text(LOCTEXT("AddToHidden", "Add Selected")).OnClicked(
 										this, &SMinimapGeneratorWindow::OnAddSelectedToHiddenList)
+								]
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("RemoveFromHidden", "Remove Selected")).OnClicked(
+										this, &SMinimapGeneratorWindow::OnRemoveSelectedFromHiddenList)
 								]
 								+ SHorizontalBox::Slot()
 								[
@@ -917,6 +940,77 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToHiddenList()
 			HiddenActorsListView->RequestListRefresh();
 		}
 	}
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnRemoveSelectedFromShowOnlyList()
+{
+	// Lấy danh sách các item (TSharedPtr<FString>) đang được chọn
+	if (TArray<TSharedPtr<FString>> SelectedItems = ShowOnlyActorsListView->GetSelectedItems(); SelectedItems.Num() > 0)
+	{
+		// Tạo một Set chứa tên các actor cần xóa để tra cứu nhanh
+		TSet<FString> NamesToRemove;
+		for (const TSharedPtr<FString>& Item : SelectedItems)
+		{
+			if (Item.IsValid())
+			{
+				NamesToRemove.Add(*Item);
+			}
+		}
+
+		// Xóa khỏi danh sách hiển thị trên UI (ShowOnlyActorNames)
+		ShowOnlyActorNames.RemoveAll([&NamesToRemove](const TSharedPtr<FString>& Item)
+		{
+			return Item.IsValid() && NamesToRemove.Contains(*Item);
+		});
+
+		// Xóa khỏi danh sách dữ liệu backend (Settings.ShowOnlyActors)
+		Settings.ShowOnlyActors.RemoveAll([&NamesToRemove](const TSoftObjectPtr<AActor>& ActorPtr)
+		{
+			if (const AActor* Actor = ActorPtr.Get())
+			{
+				return NamesToRemove.Contains(Actor->GetActorLabel());
+			}
+			return true; // Xóa cả các con trỏ không hợp lệ (nếu có)
+		});
+
+		// Yêu cầu ListView cập nhật lại giao diện
+		ShowOnlyActorsListView->RequestListRefresh();
+	}
+
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnRemoveSelectedFromHiddenList()
+{
+	if (TArray<TSharedPtr<FString>> SelectedItems = HiddenActorsListView->GetSelectedItems(); SelectedItems.Num() > 0)
+	{
+		TSet<FString> NamesToRemove;
+		for (const TSharedPtr<FString>& Item : SelectedItems)
+		{
+			if (Item.IsValid())
+			{
+				NamesToRemove.Add(*Item);
+			}
+		}
+
+		HiddenActorNames.RemoveAll([&NamesToRemove](const TSharedPtr<FString>& Item)
+		{
+			return Item.IsValid() && NamesToRemove.Contains(*Item);
+		});
+
+		Settings.HiddenActors.RemoveAll([&NamesToRemove](const TSoftObjectPtr<AActor>& ActorPtr)
+		{
+			if (const AActor* Actor = ActorPtr.Get())
+			{
+				return NamesToRemove.Contains(Actor->GetActorLabel());
+			}
+			return true;
+		});
+
+		HiddenActorsListView->RequestListRefresh();
+	}
+
 	return FReply::Handled();
 }
 

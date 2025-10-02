@@ -129,6 +129,8 @@ private:
 	FReply OnClearShowOnlyList();
 	FReply OnAddSelectedToHiddenList();
 	FReply OnClearHiddenList();
+	FReply OnRemoveSelectedFromShowOnlyList();
+	FReply OnRemoveSelectedFromHiddenList();
 
 	TSharedPtr<SClassPropertyEntryBox> ActorClassFilterBox;
 	TSharedPtr<SEditableTextBox> ActorTagFilterTextBox;
