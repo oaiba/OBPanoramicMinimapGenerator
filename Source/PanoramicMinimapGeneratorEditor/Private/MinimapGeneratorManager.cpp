@@ -172,13 +172,13 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 
 	if (bSuccess && Settings.bImportAsTextureAsset && !SavedImagePath.IsEmpty())
 	{
-		const FString AssetName = TEXT("T_") + FPaths::GetBaseFilename(SavedImagePath);
+		// const FString AssetName = TEXT("T_") + FPaths::GetBaseFilename(SavedImagePath);
 		FString PackagePath = Settings.AssetPath;
 		if (!PackagePath.EndsWith(TEXT("/")))
 		{
 			PackagePath += TEXT("/");
 		}
-		const FString FullAssetPath = PackagePath + AssetName;
+		const FString FullAssetPath = PackagePath + FPaths::GetBaseFilename(SavedImagePath);
 
 		UPackage* Package = CreatePackage(*FullAssetPath);
 		Package->FullyLoad();
@@ -198,7 +198,7 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 		{
 			if (TArray<uint8> UncompressedBGRA; ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
 			{
-				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *AssetName, RF_Public | RF_Standalone);
+				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *FPaths::GetBaseFilename(SavedImagePath), RF_Public | RF_Standalone);
 				NewTexture->AddToRoot();
 
 				NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8,
