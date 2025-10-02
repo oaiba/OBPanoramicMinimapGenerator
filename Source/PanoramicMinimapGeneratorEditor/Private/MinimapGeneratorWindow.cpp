@@ -525,6 +525,18 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath)
 {
 	StartButton->SetEnabled(true);
+	// Đặt một timer ngắn để ẩn thanh progress và text sau khi hoàn tất
+	// Điều này cho phép người dùng nhìn thấy trạng thái "Done!" hoặc "Failed!" trong giây lát
+	GEditor->GetTimerManager()->SetTimer(
+		TimerHandle_HideProgress,
+		[this]()
+		{
+			ProgressBar->SetVisibility(EVisibility::Collapsed);
+			StatusText->SetVisibility(EVisibility::Collapsed);
+		},
+		2.0f, // Ẩn sau 2 giây
+		false
+	);
 
 	if (bSuccess && !FinalImagePath.IsEmpty() && IFileManager::Get().FileExists(*FinalImagePath))
 	{

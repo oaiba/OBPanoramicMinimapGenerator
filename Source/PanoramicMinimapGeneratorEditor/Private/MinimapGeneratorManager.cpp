@@ -145,6 +145,7 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 {
 	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
+	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
 	if (Settings.bUseTiling)
 	{
 		StartTiledCaptureProcess();
@@ -160,10 +161,12 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 	if (bSuccess)
 	{
 		UE_LOG(LogTemp, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
+		OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
 	}
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("Async save task failed."));
+		OnProgress.Broadcast(FText::FromString(TEXT("Failed!")), 1.0f, 0, 0);
 	}
 	OnCaptureComplete.Broadcast(bSuccess, SavedImagePath);
 
@@ -388,6 +391,7 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 		{
 			UE_LOG(LogTemp, Log, TEXT("GPU readback complete. Starting async save task."));
 			StartImageSaveTask(MoveTemp(StagingPixelBuffer), Settings.OutputWidth, Settings.OutputHeight);
+			OnProgress.Broadcast(FText::FromString(TEXT("Saving image...")), 0.95f, 0, 0);
 		}
 		else
 		{
@@ -465,10 +469,6 @@ void UMinimapGeneratorManager::CalculateGrid()
 	UE_LOG(LogTemp, Log, TEXT("Calculated Grid: %d x %d tiles"), NumTilesX, NumTilesY);
 }
 
-// MinimapGeneratorManager.cpp
-
-// ... (các hàm trước CaptureNextTile giữ nguyên) ...
-
 void UMinimapGeneratorManager::CaptureNextTile()
 {
 	if (CurrentTileIndex >= NumTilesX * NumTilesY)
@@ -522,11 +522,15 @@ void UMinimapGeneratorManager::CaptureNextTile()
 
 	CaptureComponent->CaptureScene();
 
+	const float CurrentProgress = static_cast<float>(CurrentTileIndex) / (NumTilesX * NumTilesY);
+
 	OnProgress.Broadcast(
-		FText::Format(
-			NSLOCTEXT("MinimapGeneratorManager", "CapturingTileFmt", "Capturing tile {0}/{1}..."),
-			FText::AsNumber(CurrentTileIndex + 1), FText::AsNumber(NumTilesX * NumTilesY)),
-		static_cast<float>(CurrentTileIndex) / (NumTilesX * NumTilesY), CurrentTileIndex, NumTilesX * NumTilesY);
+		FText::Format(FText::FromString("Capturing tile {0}/{1}..."), FText::AsNumber(CurrentTileIndex + 1), FText::AsNumber(NumTilesX * NumTilesY)),
+		CurrentProgress * 0.9f,
+		CurrentTileIndex, 
+		NumTilesX * NumTilesY
+	);
+	
 	GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimerForNextTick(
 		this, &UMinimapGeneratorManager::OnTileRenderedAndContinue);
 }
@@ -575,6 +579,7 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 void UMinimapGeneratorManager::StartStitching()
 {
 	UE_LOG(LogTemp, Log, TEXT("All tiles captured. Starting stitching process..."));
+	OnProgress.Broadcast(FText::FromString(TEXT("Stitching tiles...")), 0.9f, 0, 0);
 
 	if (ActiveCaptureActor.IsValid())
 	{
@@ -689,6 +694,7 @@ void UMinimapGeneratorManager::StartStitching()
 	}
 
 	CapturedTileData.Empty();
+	OnProgress.Broadcast(FText::FromString(TEXT("Saving final image...")), 0.95f, 0, 0);
 	StartImageSaveTask(MoveTemp(FinalImageData), Settings.OutputWidth, Settings.OutputHeight);
 }
 

@@ -61,6 +61,8 @@ private:
 	// Chúng ta cần lưu lại con trỏ tới các widget nhập liệu để có thể đọc giá trị của chúng
 	void HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath);
 
+	FTimerHandle TimerHandle_HideProgress;
+
 	// Region Settings
 	TSharedPtr<SSpinBox<float>> BoundsMinX, BoundsMinY, BoundsMinZ;
 	TSharedPtr<SSpinBox<float>> BoundsMaxX, BoundsMaxY, BoundsMaxZ;
