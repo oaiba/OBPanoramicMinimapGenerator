@@ -29,10 +29,14 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
 	int32 OutputHeight = 4096;
 
+	// === THÊM CÁC THUỘC TÍNH MỚI CHO TILING ===
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling")
+	bool bUseTiling = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
 	int32 TileResolution = 2048;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
 	int32 TileOverlap = 64; // in pixels
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (
@@ -108,7 +112,7 @@ class PANORAMICMINIMAPGENERATOREDITOR_API UMinimapGeneratorManager : public UObj
 public:
 	// Starts the entire capture and stitching process
 	void StartCaptureProcess(const FMinimapCaptureSettings& InSettings);
-	void StartSingleCaptureForValidation(const FMinimapCaptureSettings& InSettings);
+	void StartSingleCaptureForValidation();
 
 	// Delegate for UI updates
 	FOnMinimapProgress OnProgress;
@@ -120,8 +124,6 @@ public:
 	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath) const;
 private:
 	// Main steps of the process
-	void CalculateGrid();
-	void StartStitching();
 	void OnAllTasksCompleted();
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
@@ -137,7 +139,7 @@ private:
 	void ReadPixelsAndFinalize();
 
 	/** Tạo tên file cuối cùng và khởi động AsyncTask để lưu ảnh. */
-	void StartImageSaveTask(TArray<FColor> PixelData);
+	void StartImageSaveTask(TArray<FColor> PixelData, int32 ImageWidth, int32 ImageHeight);
 
 	// The main function to drive the process
 	void ProcessNextTile();
@@ -153,13 +155,16 @@ private:
 
 	// Member variables
 	FMinimapCaptureSettings Settings;
+	TMap<FIntPoint, TArray<FColor>> CapturedTileData;
 	int32 NumTilesX = 0;
 	int32 NumTilesY = 0;
 	int32 CurrentTileIndex = 0;
-
-	// We'll store captured tile data here before stitching
-	TMap<FIntPoint, TArray<FColor>> CapturedTileData;
-
+	void StartTiledCaptureProcess();
+	void CalculateGrid();
+	void CaptureNextTile();
+	void OnTileRenderedAndContinue();
+	void StartStitching();
+	
 	void CaptureTileWithScreenshot();
 	void OnScreenshotCaptured(int32 Width, int32 Height, const TArray<FColor>& PixelData);
 

@@ -154,22 +154,45 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						]
 						.BodyContent()
 						[
-							SNew(SGridPanel).FillColumn(1, 1.0f)
-							+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight()
 							[
-								SNew(STextBlock).Text(LOCTEXT("TileResLabel", "Tile Resolution"))
+								SAssignNew(UseTilingCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
+								[
+									SNew(STextBlock)
+									.Text(LOCTEXT("UseTilingLabel", "Use Tiled Capture (for high resolutions)"))
+									.Font(FAppStyle::GetFontStyle("BoldFont"))
+								]
 							]
-							+ SGridPanel::Slot(1, 0)
+							+ SVerticalBox::Slot().AutoHeight().Padding(15, 5, 0, 5)
 							[
-								SAssignNew(TileResolution, SSpinBox<int32>).MinValue(256).MaxValue(8192).Value(2048)
-							]
-							+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
-							[
-								SNew(STextBlock).Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
-							]
-							+ SGridPanel::Slot(1, 1)
-							[
-								SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(64)
+								SNew(SVerticalBox)
+								.Visibility(this, &SMinimapGeneratorWindow::GetTilingSettingsVisibility)
+								+ SVerticalBox::Slot().AutoHeight()
+								[
+									SNew(SHorizontalBox)
+									+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+									[
+										SNew(STextBlock).Text(LOCTEXT("TileResLabel", "Tile Resolution"))
+									]
+									+ SHorizontalBox::Slot().FillWidth(0.6f)
+									[
+										SAssignNew(TileResolution, SSpinBox<int32>).MinValue(256).MaxValue(8192).Value(
+											2048)
+									]
+								]
+								+ SVerticalBox::Slot().AutoHeight()
+								[
+									SNew(SHorizontalBox)
+									+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+									[
+										SNew(STextBlock).Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
+									]
+									+ SHorizontalBox::Slot().FillWidth(0.6f)
+									[
+										SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(64)
+									]
+								]
 							]
 						]
 					]
@@ -229,12 +252,12 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							.Padding(2, 5, 2, 5)
 							[
 								SNew(STextBlock)
-												.Text(LOCTEXT("RotationWarning",
-															  "Warning: Non-square output. Adjust Pitch by +/- 90° if capture is misaligned."))
-												.ColorAndOpacity(FAppStyle::GetSlateColor("Colors.Warning"))
-												.Visibility(
-													this, &SMinimapGeneratorWindow::GetRotationWarningVisibility)
-												.AutoWrapText(true)
+								.Text(LOCTEXT("RotationWarning",
+											  "Warning: Non-square output. Adjust Pitch by +/- 90° if capture is misaligned."))
+								.ColorAndOpacity(FAppStyle::GetSlateColor("Colors.Warning"))
+								.Visibility(
+									this, &SMinimapGeneratorWindow::GetRotationWarningVisibility)
+								.AutoWrapText(true)
 							]
 							+ SGridPanel::Slot(1, 3)
 							[
@@ -618,6 +641,11 @@ EVisibility SMinimapGeneratorWindow::GetAssetPathVisibility() const
 	return ImportAsAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
+EVisibility SMinimapGeneratorWindow::GetTilingSettingsVisibility() const
+{
+	return UseTilingCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 {
 	UE_LOG(LogTemp, Log, TEXT("Start Capture button clicked."));
@@ -645,6 +673,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	{
 		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
 	}
+	Settings.bUseTiling = UseTilingCheckbox->IsChecked();
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
 	Settings.CameraHeight = CameraHeight->GetValue();
@@ -676,8 +705,8 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	StatusText->SetVisibility(EVisibility::Visible);
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);
 
-	// Manager->StartCaptureProcess(Settings);
-	Manager->StartSingleCaptureForValidation(Settings);
+	Manager->StartCaptureProcess(Settings);
+	// Manager->StartSingleCaptureForValidation(Settings);
 
 	return FReply::Handled();
 }

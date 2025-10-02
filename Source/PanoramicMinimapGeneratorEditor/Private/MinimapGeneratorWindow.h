@@ -83,8 +83,10 @@ private:
 	TSharedPtr<SCheckBox> AutoFilenameCheckbox;
 
 	// Tiling Settings
+	TSharedPtr<SCheckBox> UseTilingCheckbox; // Thêm con trỏ này
 	TSharedPtr<SSpinBox<int32>> TileResolution;
 	TSharedPtr<SSpinBox<int32>> TileOverlap;
+	EVisibility GetTilingSettingsVisibility() const; // Thêm hàm này
 
 	// Camera Settings
 	TSharedPtr<SSpinBox<float>> CameraHeight;
