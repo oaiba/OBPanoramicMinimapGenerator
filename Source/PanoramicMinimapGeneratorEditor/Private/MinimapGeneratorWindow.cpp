@@ -231,7 +231,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									SAssignNew(RotationRollSpinBox, SSpinBox<float>)
 									.MinValue(-360.f)
 									.MaxValue(360.f)
-									.Value(-180.f)
+									.Value(-90.f)
 								]
 								+ SWrapBox::Slot().Padding(2)
 								[
