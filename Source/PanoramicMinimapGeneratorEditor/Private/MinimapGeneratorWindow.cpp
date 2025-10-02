@@ -512,11 +512,11 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
-				SAssignNew(ProgressBar, SProgressBar).Percent(0.0f).Visibility(EVisibility::Collapsed)
+				SAssignNew(ProgressBar, SProgressBar).Percent(0.0f).Visibility(EVisibility::Hidden)
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
-				SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Collapsed)
+				SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Hidden)
 			]
 		]
 	];
@@ -531,8 +531,8 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 		TimerHandle_HideProgress,
 		[this]()
 		{
-			ProgressBar->SetVisibility(EVisibility::Collapsed);
-			StatusText->SetVisibility(EVisibility::Collapsed);
+			ProgressBar->SetVisibility(EVisibility::Hidden);
+			StatusText->SetVisibility(EVisibility::Hidden);
 		},
 		2.0f, // Ẩn sau 2 giây
 		false
