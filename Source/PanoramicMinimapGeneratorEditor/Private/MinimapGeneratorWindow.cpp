@@ -186,11 +186,14 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									SNew(SHorizontalBox)
 									+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
 									[
-										SNew(STextBlock).Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
+										SNew(STextBlock)
+										.Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
+										.ToolTipText(LOCTEXT("TileOverlapTooltip",
+															 "Maximum value to hide grid lines where tiles overlap"))
 									]
 									+ SHorizontalBox::Slot().FillWidth(0.6f)
 									[
-										SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(64)
+										SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(1024)
 									]
 								]
 							]
