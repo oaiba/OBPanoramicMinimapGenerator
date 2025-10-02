@@ -616,7 +616,7 @@ void SMinimapGeneratorWindow::OnBackgroundModeChanged(ECheckBoxState NewState, E
 
 EVisibility SMinimapGeneratorWindow::GetBackgroundColorPickerVisibility() const
 {
-	return CurrentBackgroundMode == EMinimapBackgroundMode::SolidColor ? EVisibility::Visible : EVisibility::Collapsed;
+	return CurrentBackgroundMode == EMinimapBackgroundMode::SolidColor ? EVisibility::Visible : EVisibility::Hidden;
 }
 
 EVisibility SMinimapGeneratorWindow::GetRotationWarningVisibility() const
@@ -653,7 +653,7 @@ void SMinimapGeneratorWindow::OnOutputHeightChanged(TSharedPtr<int32> NewSelecti
 
 EVisibility SMinimapGeneratorWindow::GetAssetPathVisibility() const
 {
-	return ImportAsAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
+	return ImportAsAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Hidden;
 }
 
 EVisibility SMinimapGeneratorWindow::GetTilingSettingsVisibility() const
