@@ -226,6 +226,17 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								]
 							]
 							+ SGridPanel::Slot(1, 2)
+							.Padding(2, 5, 2, 5)
+							[
+								SNew(STextBlock)
+												.Text(LOCTEXT("RotationWarning",
+															  "Warning: Non-square output. Adjust Pitch by +/- 90° if capture is misaligned."))
+												.ColorAndOpacity(FAppStyle::GetSlateColor("Colors.Warning"))
+												.Visibility(
+													this, &SMinimapGeneratorWindow::GetRotationWarningVisibility)
+												.AutoWrapText(true)
+							]
+							+ SGridPanel::Slot(1, 3)
 							[
 								SAssignNew(IsOrthographicCheckbox, SCheckBox)
 								.IsChecked(ECheckBoxState::Checked)
@@ -234,11 +245,11 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									SNew(STextBlock).Text(LOCTEXT("IsOrthoLabel", "Use Orthographic Projection"))
 								]
 							]
-							+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+							+ SGridPanel::Slot(0, 4).HAlign(HAlign_Right).Padding(LabelPadding)
 							[
 								SNew(STextBlock).Text(LOCTEXT("CameraFOVLabel", "Camera FOV (Perspective only)"))
 							]
-							+ SGridPanel::Slot(1, 3)
+							+ SGridPanel::Slot(1, 4)
 							[
 								SAssignNew(CameraFOV, SSpinBox<float>)
 								.MinValue(10.f)
@@ -570,6 +581,15 @@ EVisibility SMinimapGeneratorWindow::GetBackgroundColorPickerVisibility() const
 	return CurrentBackgroundMode == EMinimapBackgroundMode::SolidColor ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
+EVisibility SMinimapGeneratorWindow::GetRotationWarningVisibility() const
+{
+	if (CurrentOutputWidth.IsValid() && CurrentOutputHeight.IsValid())
+	{
+		return (*CurrentOutputWidth != *CurrentOutputHeight) ? EVisibility::Visible : EVisibility::Collapsed;
+	}
+	return EVisibility::Collapsed;
+}
+
 EVisibility SMinimapGeneratorWindow::GetOverrideSettingsVisibility() const
 {
 	return OverrideQualityCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
@@ -621,7 +641,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	}
 	Settings.bUseAutoFilename = AutoFilenameCheckbox->IsChecked();
 	Settings.bImportAsTextureAsset = ImportAsAssetCheckbox->IsChecked();
-	if(Settings.bImportAsTextureAsset)
+	if (Settings.bImportAsTextureAsset)
 	{
 		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
 	}

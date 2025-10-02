@@ -55,7 +55,7 @@ private:
 	
 	/** Quyết định việc hiển thị ô chọn màu */
 	EVisibility GetBackgroundColorPickerVisibility() const;
-	// ============================================
+	EVisibility GetRotationWarningVisibility() const;
 
 	// --- CON TRỎ TỚI CÁC WIDGET CẦN TƯƠNG TÁC ---
 	// Chúng ta cần lưu lại con trỏ tới các widget nhập liệu để có thể đọc giá trị của chúng

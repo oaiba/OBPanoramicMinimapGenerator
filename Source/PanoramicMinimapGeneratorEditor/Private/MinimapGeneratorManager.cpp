@@ -259,9 +259,19 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
 	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
 	const FRotator CameraRotation = Settings.CameraRotation;
-	const float OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.
-		OutputHeight);
-	const float CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
+	float OutputAspectRatio;
+	float CameraOrthoWidth;
+	if (Settings.OutputWidth >= Settings.OutputHeight)
+	{
+		OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.
+			OutputHeight);
+		CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
+	}
+	else
+	{
+		OutputAspectRatio = static_cast<float>(Settings.OutputHeight) / static_cast<float>(Settings.OutputWidth);
+		CameraOrthoWidth = FMath::Max(BoundsSize.Y, BoundsSize.X / OutputAspectRatio);
+	}
 
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
