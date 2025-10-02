@@ -44,9 +44,13 @@ struct FMinimapCaptureSettings
 	EditCondition = "bUseTiling", Tooltip = "If checked, saves each captured tile as a separate image for debugging the stitching process."))
 	bool bSaveTiles = true;
 
+	// QUALITY
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (
 	Tooltip = "If checked, forces cinematic-quality post-processing. If unchecked (default), uses the current editor viewport scalability settings for better performance."))
 	bool bOverrideWithHighQualitySettings = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality")
+	bool bCaptureDynamicShadows = true;
 
 	// === CÁC THUỘC TÍNH MỚI CHO OVERRIDE ===
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (EditCondition = "bOverrideWithHighQualitySettings"))

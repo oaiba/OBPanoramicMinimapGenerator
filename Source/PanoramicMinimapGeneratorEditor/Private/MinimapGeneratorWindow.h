@@ -44,7 +44,7 @@ private:
 	EMinimapBackgroundMode CurrentBackgroundMode = EMinimapBackgroundMode::Transparent;
 
 	/** Con trỏ tới widget chọn màu */
-	FLinearColor SelectedBackgroundColor;
+	FLinearColor SelectedBackgroundColor = FLinearColor::Black;
 	FLinearColor GetSelectedBackgroundColor() const;
 	FReply OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent);
 	void OnBackgroundColorChanged(FLinearColor NewColor);
@@ -100,6 +100,7 @@ private:
 	TSharedPtr<SSpinBox<float>> CameraFOV;
 
 	// Quality Settings
+	TSharedPtr<SCheckBox> CaptureDynamicShadowsCheckbox; 
 	TSharedPtr<SCheckBox> OverrideQualityCheckbox; 
 	// === THÊM CÁC WIDGET VÀ HÀM MỚI ===
 	// Con trỏ tới các widget cài đặt chi tiết

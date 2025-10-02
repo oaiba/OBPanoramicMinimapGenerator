@@ -307,6 +307,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	BuildFinalShowOnlyList(FinalShowList);
 
 	// CaptureComponent->ShowFlags = FEngineShowFlags(ESFIM_Editor);
+	CaptureComponent->ShowFlags.SetDynamicShadows(Settings.bCaptureDynamicShadows);
 	CaptureComponent->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
 	CaptureComponent->ShowOnlyActors = FinalShowList;
 	CaptureComponent->HiddenActors.Empty();

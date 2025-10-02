@@ -189,7 +189,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 										SNew(STextBlock)
 										.Text(LOCTEXT("TileOverlapLabel", "Tile Overlap (px)"))
 										.ToolTipText(LOCTEXT("TileOverlapTooltip",
-															 "Maximum value to hide grid lines where tiles overlap"))
+										                     "Maximum value to hide grid lines where tiles overlap"))
 									]
 									+ SHorizontalBox::Slot().FillWidth(0.6f)
 									[
@@ -256,7 +256,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							[
 								SNew(STextBlock)
 								.Text(LOCTEXT("RotationWarning",
-											  "Warning: Non-square output. Adjust Pitch by +/- 90° if capture is misaligned."))
+								              "Warning: Non-square output. Adjust Pitch by +/- 90° if capture is misaligned."))
 								.ColorAndOpacity(FAppStyle::GetSlateColor("Colors.Warning"))
 								.Visibility(
 									this, &SMinimapGeneratorWindow::GetRotationWarningVisibility)
@@ -299,6 +299,14 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						.BodyContent()
 						[
 							SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight().Padding(15, 5)
+							[
+								SAssignNew(CaptureDynamicShadowsCheckbox, SCheckBox)
+								.IsChecked(ECheckBoxState::Checked)
+								[
+									SNew(STextBlock).Text(LOCTEXT("DynamicShadowsLabel", "Capture Dynamic Shadows"))
+								]
+							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(15, 5)
 							[
 								SAssignNew(OverrideQualityCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
@@ -563,7 +571,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							SAssignNew(AutoFilenameCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
 							[
 								SNew(STextBlock).Text(LOCTEXT("AutoFilenameLabel",
-															  "Auto-Generate Filename with Timestamp"))
+								                              "Auto-Generate Filename with Timestamp"))
 							]
 						]
 						+ SGridPanel::Slot(1, 6) // <<-- Đây là slot mới cho Checkbox
@@ -598,9 +606,9 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								SNew(SCheckBox)
 								.Style(FAppStyle::Get(), "RadioButton")
 								.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
-										   EMinimapBackgroundMode::Transparent)
+								           EMinimapBackgroundMode::Transparent)
 								.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
-													 EMinimapBackgroundMode::Transparent)
+								                     EMinimapBackgroundMode::Transparent)
 								[
 									SNew(STextBlock).Text(LOCTEXT("TransparentRadio", "Transparent"))
 								]
@@ -610,9 +618,9 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								SNew(SCheckBox)
 								.Style(FAppStyle::Get(), "RadioButton")
 								.IsChecked(this, &SMinimapGeneratorWindow::IsBackgroundModeChecked,
-										   EMinimapBackgroundMode::SolidColor)
+								           EMinimapBackgroundMode::SolidColor)
 								.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnBackgroundModeChanged,
-													 EMinimapBackgroundMode::SolidColor)
+								                     EMinimapBackgroundMode::SolidColor)
 								[
 									SNew(STextBlock).Text(LOCTEXT("SolidColorRadio", "Solid Color"))
 								]
@@ -716,7 +724,7 @@ void SMinimapGeneratorWindow::OnBackgroundColorChanged(const FLinearColor NewCol
 }
 
 FReply SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry,
-																	  const FPointerEvent& MouseEvent)
+                                                                      const FPointerEvent& MouseEvent)
 {
 	if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
@@ -829,6 +837,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	);
 	Settings.bIsOrthographic = IsOrthographicCheckbox->IsChecked();
 	Settings.CameraFOV = CameraFOV->GetValue();
+	Settings.bCaptureDynamicShadows = CaptureDynamicShadowsCheckbox->IsChecked();
 	Settings.bOverrideWithHighQualitySettings = OverrideQualityCheckbox->IsChecked();
 	if (Settings.bOverrideWithHighQualitySettings)
 	{
@@ -1051,8 +1060,8 @@ FReply SMinimapGeneratorWindow::OnBrowseButtonClicked()
 		const TSharedPtr<SWindow> ParentWindow = FSlateApplication::Get().FindBestParentWindowForDialogs(AsShared());
 
 		const void* ParentWindowHandle = (ParentWindow.IsValid())
-											 ? ParentWindow->GetNativeWindow()->GetOSWindowHandle()
-											 : nullptr;
+			                                 ? ParentWindow->GetNativeWindow()->GetOSWindowHandle()
+			                                 : nullptr;
 
 		FString OutFolderName;
 		const bool bFolderSelected = DesktopPlatform->OpenDirectoryDialog(
@@ -1139,7 +1148,7 @@ void SMinimapGeneratorWindow::OnProjectionTypeChanged(ECheckBoxState NewState)
 }
 
 void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile,
-												int32 TotalTiles)
+                                                int32 TotalTiles)
 {
 	// Đây là hàm được gọi từ Manager thông qua delegate
 	ProgressBar->SetPercent(Percentage);
