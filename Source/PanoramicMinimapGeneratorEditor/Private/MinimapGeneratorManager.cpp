@@ -14,6 +14,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Async/Async.h"
 #include "RHICommandList.h"
+#include "Kismet/GameplayStatics.h"
 
 class FSaveImageTask : public FNonAbandonableTask
 {
@@ -198,7 +199,8 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 		{
 			if (TArray<uint8> UncompressedBGRA; ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
 			{
-				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *FPaths::GetBaseFilename(SavedImagePath), RF_Public | RF_Standalone);
+				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *FPaths::GetBaseFilename(SavedImagePath),
+															   RF_Public | RF_Standalone);
 				NewTexture->AddToRoot();
 
 				NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8,
@@ -300,6 +302,14 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
+	// FILTERING
+	TArray<AActor*> FinalShowList;
+	BuildFinalShowOnlyList(FinalShowList);
+
+	CaptureComponent->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+	CaptureComponent->ShowOnlyActors = FinalShowList;
+	CaptureComponent->HiddenActors.Empty();
+	// ===================================
 
 	CaptureComponent->bCaptureEveryFrame = false;
 	CaptureComponent->bCaptureOnMovement = false;
@@ -417,6 +427,76 @@ void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData, int3
 		StartBackgroundTask();
 }
 
+void UMinimapGeneratorManager::BuildFinalShowOnlyList(TArray<AActor*>& OutShowOnlyList) const
+{
+	OutShowOnlyList.Empty();
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World) return;
+
+	// 1. Xác định Nguồn (Source Pool)
+	TArray<AActor*> CandidateActors;
+	TArray<AActor*> ExplicitShowOnlyList;
+	for (const TSoftObjectPtr<AActor>& ActorPtr : Settings.ShowOnlyActors)
+	{
+		if (AActor* Actor = ActorPtr.Get())
+		{
+			ExplicitShowOnlyList.Add(Actor);
+		}
+	}
+
+	if (ExplicitShowOnlyList.Num() > 0)
+	{
+		// Nếu danh sách ShowOnly có phần tử, nguồn của chúng ta là danh sách này
+		CandidateActors = ExplicitShowOnlyList;
+	}
+	else
+	{
+		// Nếu không, nguồn là tất cả các actor trong world
+		UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), CandidateActors);
+	}
+
+	// 2. Xây dựng một tập hợp (Set) các actor cần ẩn để tra cứu nhanh
+	TSet<AActor*> ActorsToHide;
+	// Thêm từ danh sách HiddenActors
+	for (const TSoftObjectPtr<AActor>& ActorPtr : Settings.HiddenActors)
+	{
+		if (AActor* Actor = ActorPtr.Get())
+		{
+			ActorsToHide.Add(Actor);
+		}
+	}
+
+	// 3. Lặp qua tất cả actor trong world để tìm các actor khớp với bộ lọc Class và Tag
+	// (Chúng ta cần lặp qua tất cả actor để đảm bảo bộ lọc "Hide by Class/Tag" hoạt động ngay cả khi ShowOnly list được dùng)
+	TArray<AActor*> AllActors;
+	UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+	for (AActor* Actor : AllActors)
+	{
+		if (!Actor) continue;
+
+		// Ẩn nếu khớp Class Filter
+		if (Settings.ActorClassFilter && Actor->IsA(Settings.ActorClassFilter))
+		{
+			ActorsToHide.Add(Actor);
+		}
+
+		// Ẩn nếu khớp Tag Filter
+		if (!Settings.ActorTagFilter.IsNone() && Actor->Tags.Contains(Settings.ActorTagFilter))
+		{
+			ActorsToHide.Add(Actor);
+		}
+	}
+
+	// 4. Lọc lần cuối: Lặp qua nguồn và chỉ giữ lại những actor không nằm trong danh sách cần ẩn
+	for (AActor* Candidate : CandidateActors)
+	{
+		if (Candidate && !ActorsToHide.Contains(Candidate))
+		{
+			OutShowOnlyList.Add(Candidate);
+		}
+	}
+}
+
 // ===================================================================
 // LOGIC 2: TILED CAPTURE
 // ===================================================================
@@ -485,7 +565,7 @@ void UMinimapGeneratorManager::CaptureNextTile()
 
 	const int32 TileX = CurrentTileIndex % NumTilesX;
 	const int32 TileY = CurrentTileIndex / NumTilesX;
-	
+
 	// 1. Calculate the consistent World Units Per Pixel (WUPP)
 	// We use the maximum dimension of the World Bounds and the Output Resolution to get a single, 
 	// non-stretched WUPP value. This ensures 1 pixel is always the same world distance.
@@ -525,12 +605,13 @@ void UMinimapGeneratorManager::CaptureNextTile()
 	const float CurrentProgress = static_cast<float>(CurrentTileIndex) / (NumTilesX * NumTilesY);
 
 	OnProgress.Broadcast(
-		FText::Format(FText::FromString("Capturing tile {0}/{1}..."), FText::AsNumber(CurrentTileIndex + 1), FText::AsNumber(NumTilesX * NumTilesY)),
+		FText::Format(FText::FromString("Capturing tile {0}/{1}..."), FText::AsNumber(CurrentTileIndex + 1),
+					  FText::AsNumber(NumTilesX * NumTilesY)),
 		CurrentProgress * 0.9f,
-		CurrentTileIndex, 
+		CurrentTileIndex,
 		NumTilesX * NumTilesY
 	);
-	
+
 	GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimerForNextTick(
 		this, &UMinimapGeneratorManager::OnTileRenderedAndContinue);
 }

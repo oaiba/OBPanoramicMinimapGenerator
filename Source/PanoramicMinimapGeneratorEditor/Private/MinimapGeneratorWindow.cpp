@@ -315,6 +315,113 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							]
 						]
 					]
+
+					// --- SECTION: FILTERING (dùng SExpandableArea) ---
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+					[
+						SNew(SExpandableArea)
+						.InitiallyCollapsed(true)
+						.HeaderContent()
+						[
+							SNew(STextBlock).Text(LOCTEXT("FilteringHeader", "5. Actor Filtering")).Font(
+								FAppStyle::GetFontStyle("BoldFont"))
+						]
+						.BodyContent()
+						[
+							SNew(SVerticalBox)
+
+							// --- Show Only List ---
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
+							[
+								SNew(STextBlock).Text(LOCTEXT("ShowOnlyHeader", "Show Only Actors"))
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SBox)
+								.HeightOverride(150.0f) 
+								[
+									SAssignNew(ShowOnlyActorsListView, SListView<TSharedPtr<FString>>)
+									.ListItemsSource(&ShowOnlyActorNames)
+									.OnGenerateRow_Lambda([](const TSharedPtr<FString>& InItem, const TSharedRef<STableViewBase>& OwnerTable)
+									{
+										return SNew(STableRow<TSharedPtr<FString>>, OwnerTable) [ SNew(STextBlock).Text(FText::FromString(*InItem)) ];
+									})
+								]
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("AddToShowOnly", "Add Selected")).OnClicked(
+										this, &SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList)
+								]
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("ClearShowOnly", "Clear List")).OnClicked(
+										this, &SMinimapGeneratorWindow::OnClearShowOnlyList)
+								]
+							]
+
+							// --- Hidden List ---
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)
+							[
+								SNew(STextBlock).Text(LOCTEXT("HiddenHeader", "Hidden Actors"))
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SBox)
+								.HeightOverride(150.0f)
+								[
+									SAssignNew(HiddenActorsListView, SListView<TSharedPtr<FString>>)
+									.ListItemsSource(&HiddenActorNames)
+									.OnGenerateRow_Lambda([](const TSharedPtr<FString>& InItem, const TSharedRef<STableViewBase>& OwnerTable)
+									{
+										return SNew(STableRow<TSharedPtr<FString>>, OwnerTable) [ SNew(STextBlock).Text(FText::FromString(*InItem)) ];
+									})
+								]
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("AddToHidden", "Add Selected")).OnClicked(
+										this, &SMinimapGeneratorWindow::OnAddSelectedToHiddenList)
+								]
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("ClearHidden", "Clear List")).OnClicked(
+										this, &SMinimapGeneratorWindow::OnClearHiddenList)
+								]
+							]
+
+							// --- Filter by Class and Tag ---
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)
+							[
+								SNew(SGridPanel).FillColumn(1, 1.0f)
+								+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+								[
+									SNew(STextBlock).Text(LOCTEXT("ClassFilterLabel", "Hide Actors of Class"))
+								]
+								+ SGridPanel::Slot(1, 0)
+								[
+									SAssignNew(ActorClassFilterBox, SClassPropertyEntryBox)
+									.MetaClass(AActor::StaticClass())
+									.SelectedClass(this, &SMinimapGeneratorWindow::GetSelectedActorClass)
+									.OnSetClass(this, &SMinimapGeneratorWindow::OnActorClassChanged)
+								]
+								+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+								[
+									SNew(STextBlock).Text(LOCTEXT("TagFilterLabel", "Hide Actors with Tag"))
+								]
+								+ SGridPanel::Slot(1, 1)
+								[
+									SAssignNew(ActorTagFilterTextBox, SEditableTextBox)
+								]
+							]
+						]
+					]
 				]
 			]
 			// --- PANE BÊN PHẢI (PREVIEW VÀ OUTPUT) ---
@@ -668,7 +775,6 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	StartButton->SetEnabled(false);
 
 	// Thu thập dữ liệu từ tất cả các widget UI
-	FMinimapCaptureSettings Settings;
 	Settings.CaptureBounds = FBox(
 		FVector(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue()),
 		FVector(BoundsMaxX->GetValue(), BoundsMaxY->GetValue(), BoundsMaxZ->GetValue())
@@ -716,6 +822,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		Settings.ScreenSpaceReflectionIntensity = SSRIntensitySpinBox->GetValue();
 		Settings.ScreenSpaceReflectionQuality = SSRQualitySpinBox->GetValue();
 	}
+	Settings.ActorTagFilter = FName(*ActorTagFilterTextBox->GetText().ToString());
 	ProgressBar->SetVisibility(EVisibility::Visible);
 	StatusText->SetVisibility(EVisibility::Visible);
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);
@@ -725,6 +832,121 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 
 	return FReply::Handled();
 }
+
+// START FILTER LOGIC
+
+// In MinimapGeneratorWindow.cpp
+
+FReply SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList()
+{
+	USelection* SelectedActors = GEditor->GetSelectedActors();
+	TArray<AActor*> ActorsToAdd;
+	SelectedActors->GetSelectedObjects<AActor>(ActorsToAdd);
+
+	if (ActorsToAdd.Num() > 0)
+	{
+		// Để tránh độ phức tạp O(N^2), chúng ta dùng TSet để kiểm tra trùng lặp hiệu quả.
+		TSet<FString> ExistingActorLabels;
+		for (const TSharedPtr<FString>& NamePtr : ShowOnlyActorNames)
+		{
+			if (NamePtr.IsValid())
+			{
+				ExistingActorLabels.Add(*NamePtr);
+			}
+		}
+
+		bool bListChanged = false;
+		for (const AActor* Actor : ActorsToAdd)
+		{
+			if (Actor)
+			{
+				// TSet::Contains() cực kỳ nhanh (O(1) trung bình)
+				if (const FString ActorLabel = Actor->GetActorLabel(); !ExistingActorLabels.Contains(ActorLabel))
+				{
+					ExistingActorLabels.Add(ActorLabel);
+					ShowOnlyActorNames.Add(MakeShared<FString>(ActorLabel));
+					Settings.ShowOnlyActors.Add(Actor); // Đã đảm bảo không trùng, có thể dùng Add()
+					bListChanged = true;
+				}
+			}
+		}
+
+		if (bListChanged)
+		{
+			ShowOnlyActorsListView->RequestListRefresh();
+		}
+	}
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnAddSelectedToHiddenList()
+{
+	USelection* SelectedActors = GEditor->GetSelectedActors();
+	TArray<AActor*> ActorsToAdd;
+	SelectedActors->GetSelectedObjects<AActor>(ActorsToAdd);
+
+	if (ActorsToAdd.Num() > 0)
+	{
+		// Tương tự, dùng TSet để tối ưu
+		TSet<FString> ExistingActorLabels;
+		for (const TSharedPtr<FString>& NamePtr : HiddenActorNames)
+		{
+			if (NamePtr.IsValid())
+			{
+				ExistingActorLabels.Add(*NamePtr);
+			}
+		}
+
+		bool bListChanged = false;
+		for (const AActor* Actor : ActorsToAdd)
+		{
+			if (Actor)
+			{
+				if (const FString ActorLabel = Actor->GetActorLabel(); !ExistingActorLabels.Contains(ActorLabel))
+				{
+					ExistingActorLabels.Add(ActorLabel);
+					HiddenActorNames.Add(MakeShared<FString>(ActorLabel));
+					Settings.HiddenActors.Add(Actor);
+					bListChanged = true;
+				}
+			}
+		}
+
+		if (bListChanged)
+		{
+			HiddenActorsListView->RequestListRefresh();
+		}
+	}
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnClearShowOnlyList()
+{
+	Settings.ShowOnlyActors.Empty();
+	ShowOnlyActorNames.Empty();
+	ShowOnlyActorsListView->RequestListRefresh();
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnClearHiddenList()
+{
+	Settings.HiddenActors.Empty();
+	HiddenActorNames.Empty();
+	HiddenActorsListView->RequestListRefresh();
+	return FReply::Handled();
+}
+
+const UClass* SMinimapGeneratorWindow::GetSelectedActorClass() const
+{
+	return Settings.ActorClassFilter;
+}
+
+void SMinimapGeneratorWindow::OnActorClassChanged(const UClass* NewClass)
+{
+	Settings.ActorClassFilter = const_cast<UClass*>(NewClass);
+}
+
+// END FILTER LOGIC
 
 FReply SMinimapGeneratorWindow::OnBrowseButtonClicked()
 {

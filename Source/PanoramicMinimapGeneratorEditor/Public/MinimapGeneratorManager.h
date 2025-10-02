@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/SceneCaptureComponent.h"
 #include "Engine/SceneCapture2D.h"
 #include "UObject/Object.h"
 #include "MinimapGeneratorManager.generated.h"
@@ -96,6 +97,22 @@ struct FMinimapCaptureSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output", meta = (EditCondition = "BackgroundMode == EMinimapBackgroundMode::SolidColor"))
 	FLinearColor BackgroundColor = FLinearColor::Black;
+
+	// FILTERING
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering")
+	TEnumAsByte<ESceneCapturePrimitiveRenderMode> PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_RenderScenePrimitives;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering", meta = (EditCondition = "PrimitiveRenderMode == ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList"))
+	TArray<TSoftObjectPtr<AActor>> ShowOnlyActors;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering")
+	TArray<TSoftObjectPtr<AActor>> HiddenActors;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering")
+	TSubclassOf<AActor> ActorClassFilter;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering")
+	FName ActorTagFilter;
 };
 
 class FMinimapStreamingSourceProvider;
@@ -163,6 +180,9 @@ private:
 	// Our custom streaming source provider
 	// FORWARD DECLARATION: Good practice to avoid including the full header in our public .h file
 	TSharedPtr<FMinimapStreamingSourceProvider> MinimapStreamer;
+
+	// HELPER FUNCTION
+	void BuildFinalShowOnlyList(TArray<AActor*>& OutShowOnlyList) const;
 
 	// Member variables
 	FMinimapCaptureSettings Settings;

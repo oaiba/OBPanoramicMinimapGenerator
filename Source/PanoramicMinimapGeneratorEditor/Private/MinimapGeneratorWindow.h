@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "MinimapGeneratorManager.h" // Include để biết về UMinimapGeneratorManager và FMinimapCaptureSettings
+#include "PropertyCustomizationHelpers.h"
 #include "Slate/DeferredCleanupSlateBrush.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Input/SSpinBox.h"
@@ -117,7 +118,25 @@ private:
 
 	// Hàm quyết định việc hiển thị các cài đặt override
 	EVisibility GetOverrideSettingsVisibility() const;
-	// ===================================
+	
+	// FILTERING
+	TSharedPtr<SListView<TSharedPtr<FString>>> ShowOnlyActorsListView;
+	TSharedPtr<SListView<TSharedPtr<FString>>> HiddenActorsListView;
+	TArray<TSharedPtr<FString>> ShowOnlyActorNames;
+	TArray<TSharedPtr<FString>> HiddenActorNames;
+
+	FReply OnAddSelectedToShowOnlyList();
+	FReply OnClearShowOnlyList();
+	FReply OnAddSelectedToHiddenList();
+	FReply OnClearHiddenList();
+
+	TSharedPtr<SClassPropertyEntryBox> ActorClassFilterBox;
+	TSharedPtr<SEditableTextBox> ActorTagFilterTextBox;
+
+	/** Lấy class hiện tại đang được chọn để hiển thị trên UI */
+	const UClass* GetSelectedActorClass() const;
+	/** Được gọi khi người dùng chọn một class mới */
+	void OnActorClassChanged(const UClass* NewClass);
 	
 	// Progress Reporting
 	TSharedPtr<SProgressBar> ProgressBar;
@@ -136,4 +155,6 @@ private:
 	 * chừng nào widget của chúng ta còn tồn tại. Rất quan trọng!
 	 */
 	TStrongObjectPtr<UMinimapGeneratorManager> Manager;
+
+	FMinimapCaptureSettings Settings;
 };
