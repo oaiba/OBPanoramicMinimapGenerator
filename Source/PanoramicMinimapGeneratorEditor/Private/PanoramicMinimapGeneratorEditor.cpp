@@ -1,7 +1,7 @@
-﻿#include "PanoramicMinimapGeneratorEditor.h"
+#include "PanoramicMinimapGeneratorEditor.h"
 #include "PanoramicMinimapGeneratorCommands.h"
 #include "MinimapGeneratorWindow.h"
-#include "LevelEditor.h" // BẮT BUỘC PHẢI INCLUDE FILE NÀY
+#include "LevelEditor.h" // Required include for Level Editor menu extension.
 #include "Widgets/Docking/SDockTab.h"
 #include "Logging/LogMacros.h"
 
@@ -9,61 +9,66 @@ static const FName PanoramicMinimapGeneratorTabName("PanoramicMinimapGenerator")
 
 #define LOCTEXT_NAMESPACE "FPanoramicMinimapGeneratorEditorModule"
 
+DEFINE_LOG_CATEGORY(OBPanoramicMinimapGenerator);
 void FPanoramicMinimapGeneratorEditorModule::StartupModule()
 {
-    // Đăng ký Tab Spawner trước để nó sẵn sàng khi được gọi
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("PanoramicMinimapGeneratorEditor module startup."));
+    // Register tab spawner first so it is available when invoked.
     FGlobalTabmanager::Get()->RegisterNomadTabSpawner(PanoramicMinimapGeneratorTabName, FOnSpawnTab::CreateRaw(this, &FPanoramicMinimapGeneratorEditorModule::OnSpawnPluginTab))
 		.SetDisplayName(LOCTEXT("FPanoramicMinimapGeneratorTabTitle", "Panoramic Minimap"))
 		.SetMenuType(ETabSpawnerMenuType::Hidden);
 
-    // Đăng ký một callback để chạy hàm RegisterMenus() khi hệ thống ToolMenus sẵn sàng
+    // Register callback to run RegisterMenus() when ToolMenus is ready.
     UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FPanoramicMinimapGeneratorEditorModule::RegisterMenus));
 }
 
 void FPanoramicMinimapGeneratorEditorModule::ShutdownModule()
 {
-    // Hủy đăng ký callback để tránh lỗi khi tắt Editor
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("PanoramicMinimapGeneratorEditor module shutdown."));
+    // Unregister callback to avoid shutdown-time issues.
     UToolMenus::UnRegisterStartupCallback(this);
 
-    // Hủy đăng ký Tab Spawner
+    // Unregister tab spawner.
     FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(PanoramicMinimapGeneratorTabName);
 }
 
 void FPanoramicMinimapGeneratorEditorModule::RegisterMenus()
 {
-    // Tìm đến menu "Tools" trong Level Editor
+    // Find the "Tools" menu in Level Editor.
     UToolMenu* Menu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Tools");
     if (!Menu)
     {
-        UE_LOG(LogTemp, Error, TEXT("[PanoramicMinimapGenerator] Failed to find 'LevelEditor.MainMenu.Tools' menu."));
+        UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("[PanoramicMinimapGenerator] Failed to find 'LevelEditor.MainMenu.Tools' menu."));
         return;
     }
 
-    // Thêm một section mới vào menu "Tools"
+    // Add a new section to the "Tools" menu.
     FToolMenuSection& Section = Menu->AddSection(
-        "PanoramicTools", // Tên định danh cho section
-        LOCTEXT("PanoramicToolsSection", "Panoramic Tools") // Tên hiển thị của section
+        "PanoramicTools", // Section internal name.
+        LOCTEXT("PanoramicToolsSection", "Panoramic Tools") // Section display label.
     );
 
-    // Thêm mục menu của chúng ta vào section vừa tạo
+    // Add our menu entry into the new section.
     Section.AddMenuEntry(
-        FName("OpenPanoramicMinimapGenerator"), // Tên định danh cho menu entry
+        FName("OpenPanoramicMinimapGenerator"), // Menu entry internal name.
         LOCTEXT("PanoramicMinimapGeneratorLabel", "Panoramic Minimap Generator"),
         LOCTEXT("PanoramicMinimapGeneratorTooltip", "Opens the Panoramic Minimap Generator window."),
-        FSlateIcon(), // Bạn có thể thêm icon ở đây sau
+        FSlateIcon(), // Icon can be added later.
         FUIAction(FExecuteAction::CreateRaw(this, &FPanoramicMinimapGeneratorEditorModule::PluginButtonClicked))
     );
 
-    UE_LOG(LogTemp, Log, TEXT("[PanoramicMinimapGenerator] Menu registered successfully using UToolMenus."));
+    UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PanoramicMinimapGenerator] Menu registered successfully using UToolMenus."));
 }
 
 void FPanoramicMinimapGeneratorEditorModule::PluginButtonClicked()
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Panoramic Minimap Generator menu entry clicked."));
 	FGlobalTabmanager::Get()->TryInvokeTab(PanoramicMinimapGeneratorTabName);
 }
 
 TSharedRef<SDockTab> FPanoramicMinimapGeneratorEditorModule::OnSpawnPluginTab(const FSpawnTabArgs& SpawnTabArgs)
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Spawning Panoramic Minimap Generator tab."));
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[

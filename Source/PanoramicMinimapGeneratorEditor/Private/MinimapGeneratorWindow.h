@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
-#include "MinimapGeneratorManager.h" // Include để biết về UMinimapGeneratorManager và FMinimapCaptureSettings
+#include "MinimapGeneratorManager.h" // Include for UMinimapGeneratorManager and FMinimapCaptureSettings.
 #include "PropertyCustomizationHelpers.h"
 #include "Slate/DeferredCleanupSlateBrush.h"
 #include "Widgets/Colors/SColorBlock.h"
@@ -24,42 +24,42 @@ public:
 
 	SLATE_END_ARGS()
 
-	/** Bắt buộc phải có: Hàm này xây dựng widget khi nó được tạo ra */
+	/** Required: builds the widget when it is created. */
 	void Construct(const FArguments& InArgs);
 
 private:
-	// --- CÁC HÀM XỬ LÝ SỰ KIỆN (DELEGATES) ---
+	// --- EVENT HANDLERS (DELEGATES) ---
 
-	/** Được gọi khi nút "Start Capture" được nhấn */
+	/** Called when the "Start Capture" button is clicked. */
 	FReply OnStartCaptureClicked();
 	FReply OnBrowseButtonClicked();
 	FReply OnGetBoundsFromSelectionClicked();
 	void OnProjectionTypeChanged(ECheckBoxState NewState);
 	bool IsPerspectiveMode() const;
-	/** Được gọi bởi delegate của Manager để cập nhật UI */
+	/** Called by manager delegates to update UI state. */
 	void OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles);
 
-	// === THÊM CÁC BIẾN VÀ HÀM MỚI CHO BACKGROUND ===
-	/** Chế độ nền hiện tại được chọn trên UI */
+	// === BACKGROUND MODE STATE ===
+	/** Current background mode selected in UI. */
 	EMinimapBackgroundMode CurrentBackgroundMode = EMinimapBackgroundMode::Transparent;
 
-	/** Con trỏ tới widget chọn màu */
+	/** Current selected background color. */
 	FLinearColor SelectedBackgroundColor = FLinearColor::Black;
 	FLinearColor GetSelectedBackgroundColor() const;
 	FReply OnBackgroundColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent);
 	void OnBackgroundColorChanged(FLinearColor NewColor);
 
-	/** Được gọi khi người dùng thay đổi chế độ nền */
+	/** Called when the user changes background mode. */
 	void OnBackgroundModeChanged(ECheckBoxState NewState, EMinimapBackgroundMode Mode);
-	/** Kiểm tra xem một chế độ nền có đang được chọn hay không (dùng cho radio button) */
+	/** Returns whether a background mode is selected (used by radio buttons). */
 	ECheckBoxState IsBackgroundModeChecked(EMinimapBackgroundMode Mode) const;
 	
-	/** Quyết định việc hiển thị ô chọn màu */
+	/** Controls color picker visibility. */
 	EVisibility GetBackgroundColorPickerVisibility() const;
 	EVisibility GetRotationWarningVisibility() const;
 
-	// --- CON TRỎ TỚI CÁC WIDGET CẦN TƯƠNG TÁC ---
-	// Chúng ta cần lưu lại con trỏ tới các widget nhập liệu để có thể đọc giá trị của chúng
+	// --- WIDGET REFERENCES WE INTERACT WITH ---
+	// Keep widget pointers so we can read and update values.
 	void HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath);
 
 	FTimerHandle TimerHandle_HideProgress;
@@ -86,10 +86,10 @@ private:
 	TSharedPtr<SCheckBox> AutoFilenameCheckbox;
 
 	// Tiling Settings
-	TSharedPtr<SCheckBox> UseTilingCheckbox; // Thêm con trỏ này
+	TSharedPtr<SCheckBox> UseTilingCheckbox; // Tiling toggle checkbox.
 	TSharedPtr<SSpinBox<int32>> TileResolution;
 	TSharedPtr<SSpinBox<int32>> TileOverlap;
-	EVisibility GetTilingSettingsVisibility() const; // Thêm hàm này
+	EVisibility GetTilingSettingsVisibility() const; // Tiling options visibility helper.
 
 	// Camera Settings
 	TSharedPtr<SSpinBox<float>> CameraHeight;
@@ -102,22 +102,22 @@ private:
 	// Quality Settings
 	TSharedPtr<SCheckBox> CaptureDynamicShadowsCheckbox; 
 	TSharedPtr<SCheckBox> OverrideQualityCheckbox; 
-	// === THÊM CÁC WIDGET VÀ HÀM MỚI ===
-	// Con trỏ tới các widget cài đặt chi tiết
+	// === QUALITY OVERRIDE WIDGETS ===
+	// Pointers to advanced quality setting widgets.
 	TSharedPtr<SSpinBox<float>> AOIntensitySpinBox;
 	TSharedPtr<SSpinBox<float>> AOQualitySpinBox;
 	TSharedPtr<SSpinBox<float>> SSRIntensitySpinBox;
 	TSharedPtr<SSpinBox<float>> SSRQualitySpinBox;
 	TSharedPtr<SComboBox<TSharedPtr<FString>>> CaptureSourceComboBox;
 
-	// Dữ liệu cho ComboBox
+	// Data source for CaptureSource combo box.
 	TArray<TSharedPtr<FString>> CaptureSourceOptions;
 	TSharedPtr<FString> CurrentCaptureSource;
 
-	// Hàm delegate cho ComboBox
+	// Delegate for CaptureSource combo box selection changes.
 	void OnCaptureSourceChanged(TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo);
 
-	// Hàm quyết định việc hiển thị các cài đặt override
+	// Controls visibility of quality override settings.
 	EVisibility GetOverrideSettingsVisibility() const;
 	
 	// FILTERING
@@ -136,9 +136,9 @@ private:
 	TSharedPtr<SClassPropertyEntryBox> ActorClassFilterBox;
 	TSharedPtr<SEditableTextBox> ActorTagFilterTextBox;
 
-	/** Lấy class hiện tại đang được chọn để hiển thị trên UI */
+	/** Returns currently selected actor class for UI display. */
 	const UClass* GetSelectedActorClass() const;
-	/** Được gọi khi người dùng chọn một class mới */
+	/** Called when the user selects a new actor class. */
 	void OnActorClassChanged(const UClass* NewClass);
 	
 	// Progress Reporting
@@ -146,16 +146,16 @@ private:
 	TSharedPtr<STextBlock> StatusText;
 	TSharedPtr<SButton> StartButton;
 
-	TSharedPtr<SBox> ImageContainer; // Container để dễ dàng ẩn/hiện
+	TSharedPtr<SBox> ImageContainer; // Container used for simple show/hide behavior.
 	TSharedPtr<SImage> FinalImageView;
-	TSharedPtr<ISlateBrushSource> FinalImageBrushSource; // Lưu trữ nguồn brush để quản lý vòng đời
+	TSharedPtr<ISlateBrushSource> FinalImageBrushSource; // Keep brush source alive for lifetime management.
 
-	// --- LOGIC BACKEND ---
+	// --- BACKEND LOGIC ---
 
 	/** 
-	 * Con trỏ tới đối tượng xử lý logic.
-	 * TStrongObjectPtr đảm bảo UObject này không bị Garbage Collect (dọn rác)
-	 * chừng nào widget của chúng ta còn tồn tại. Rất quan trọng!
+	 * Pointer to the logic manager object.
+	 * TStrongObjectPtr ensures this UObject is not garbage collected
+	 * while the widget is still alive.
 	 */
 	TStrongObjectPtr<UMinimapGeneratorManager> Manager;
 

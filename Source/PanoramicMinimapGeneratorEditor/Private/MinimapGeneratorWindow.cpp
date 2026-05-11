@@ -1,7 +1,8 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "MinimapGeneratorWindow.h"
+#include "PanoramicMinimapGeneratorEditor.h"
 
 #include "DesktopPlatformModule.h"
 #include "Widgets/SBoxPanel.h"
@@ -25,11 +26,10 @@
 
 #define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
 
-// In MinimapGeneratorWindow.cpp
-
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 {
-	// --- PHẦN KHỞI TẠO DỮ LIỆU (GIỮ NGUYÊN) ---
+	// --- INITIAL DATA SETUP ---
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Constructing SMinimapGeneratorWindow."));
 	Manager = TStrongObjectPtr<UMinimapGeneratorManager>(NewObject<UMinimapGeneratorManager>());
 	Manager->OnProgress.AddSP(this, &SMinimapGeneratorWindow::OnCaptureProgress);
 	Manager->OnCaptureComplete.AddSP(this, &SMinimapGeneratorWindow::HandleCaptureCompleted);
@@ -53,25 +53,25 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 		ResolutionOptions.Add(MakeShared<int32>(1 << i));
 	}
 
-	// Đặt giá trị mặc định là 4096 (2^12)
+	// Set default resolution to 4096 (2^12).
 	CurrentOutputWidth = ResolutionOptions[7];
 	CurrentOutputHeight = ResolutionOptions[7];
 
-	// === BẮT ĐẦU CẤU TRÚC LAYOUT MỚI ===
+	// === NEW LAYOUT STRUCTURE START ===
 	ChildSlot
 	[
 		SNew(SVerticalBox)
 
-		// Slot 1: Chứa SSplitter, chiếm phần lớn không gian
+		// Slot 1: Hosts the SSplitter and takes most of the available space.
 		+ SVerticalBox::Slot()
 		.FillHeight(1.0f)
 		[
 			SNew(SSplitter)
 			.Orientation(EOrientation::Orient_Horizontal)
 
-			// --- PANE BÊN TRÁI (KHU VỰC CÀI ĐẶT) ---
+			// --- LEFT PANE (SETTINGS AREA) ---
 			+ SSplitter::Slot()
-			.Value(0.4f) // Tỉ lệ 40%
+			.Value(0.4f) // 40% ratio
 			[
 				SNew(SScrollBox)
 				+ SScrollBox::Slot()
@@ -79,7 +79,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 				[
 					SNew(SVerticalBox)
 
-					// --- SECTION: REGION (dùng SExpandableArea) ---
+					// --- SECTION: REGION (using SExpandableArea) ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
 						SNew(SExpandableArea)
@@ -142,7 +142,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						]
 					]
 
-					// --- SECTION: TILING (dùng SExpandableArea) ---
+					// --- SECTION: TILING (using SExpandableArea) ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
 						SNew(SExpandableArea)
@@ -200,7 +200,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						]
 					]
 
-					// --- SECTION: CAMERA (dùng SExpandableArea) ---
+					// --- SECTION: CAMERA (using SExpandableArea) ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
 						SNew(SExpandableArea)
@@ -286,7 +286,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						]
 					]
 
-					// --- SECTION: QUALITY (dùng SExpandableArea) ---
+					// --- SECTION: QUALITY (using SExpandableArea) ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
 						SNew(SExpandableArea)
@@ -319,12 +319,12 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							[
 								SNew(SVerticalBox).Visibility(
 									this, &SMinimapGeneratorWindow::GetOverrideSettingsVisibility)
-								// ... (Các widget override AO, SSR, CaptureSource... giữ nguyên)
+								// ... (AO, SSR, CaptureSource override widgets remain unchanged)
 							]
 						]
 					]
 
-					// --- SECTION: FILTERING (dùng SExpandableArea) ---
+					// --- SECTION: FILTERING (using SExpandableArea) ---
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 					[
 						SNew(SExpandableArea)
@@ -455,15 +455,15 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 			]
-			// --- PANE BÊN PHẢI (PREVIEW VÀ OUTPUT) ---
+			// --- RIGHT PANE (PREVIEW AND OUTPUT) ---
 			+ SSplitter::Slot()
-			.Value(0.6f) // Tỉ lệ 60%
+			.Value(0.6f) // 60% ratio
 			[
 				SNew(SVerticalBox)
 
-				// --- KHU VỰC PREVIEW ẢNH ---
+				// --- IMAGE PREVIEW AREA ---
 				+ SVerticalBox::Slot()
-				  .FillHeight(1.0f) // Cho khu vực preview chiếm phần lớn không gian
+				  .FillHeight(1.0f) // Let the preview area take most of the space.
 				  .Padding(5)
 				[
 					SNew(SBorder)
@@ -492,7 +492,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					]
 				]
 
-				// --- KHU VỰC CÀI ĐẶT OUTPUT (dùng SExpandableArea) ---
+				// --- OUTPUT SETTINGS AREA (using SExpandableArea) ---
 				+ SVerticalBox::Slot()
 				.AutoHeight()
 				.Padding(5)
@@ -574,7 +574,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								                              "Auto-Generate Filename with Timestamp"))
 							]
 						]
-						+ SGridPanel::Slot(1, 6) // <<-- Đây là slot mới cho Checkbox
+						+ SGridPanel::Slot(1, 6) // Additional slot for checkbox
 						[
 							SAssignNew(ImportAsAssetCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
 							[
@@ -582,13 +582,13 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							]
 						]
 						+ SGridPanel::Slot(0, 7).HAlign(HAlign_Right).Padding(LabelPadding)
-						// <<-- Slot mới cho nhãn Path
+						// Additional slot for path label
 						[
 							SNew(STextBlock)
 							.Text(LOCTEXT("AssetPathLabel", "Asset Path"))
 							.Visibility(this, &SMinimapGeneratorWindow::GetAssetPathVisibility)
 						]
-						+ SGridPanel::Slot(1, 7) // <<-- Slot mới cho TextBox Path
+						+ SGridPanel::Slot(1, 7) // Additional slot for path text box
 						[
 							SAssignNew(AssetPathTextBox, SEditableTextBox)
 							.Text(FText::FromString(TEXT("/Game/Minimaps/")))
@@ -638,7 +638,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 				]
 			]
 		]
-		// Slot 2: Chứa các nút bấm và progress bar, nằm cố định ở dưới cùng
+		// Slot 2: Hosts buttons and the progress bar, anchored at the bottom.
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(10)
@@ -665,9 +665,11 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 
 void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath)
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Capture completed. Success=%s, Path=%s"),
+		bSuccess ? TEXT("true") : TEXT("false"), *FinalImagePath);
 	StartButton->SetEnabled(true);
-	// Đặt một timer ngắn để ẩn thanh progress và text sau khi hoàn tất
-	// Điều này cho phép người dùng nhìn thấy trạng thái "Done!" hoặc "Failed!" trong giây lát
+	// Use a short timer to hide progress UI after completion.
+	// This lets users briefly see the final status ("Done!" or "Failed!").
 	GEditor->GetTimerManager()->SetTimer(
 		TimerHandle_HideProgress,
 		[this]()
@@ -675,7 +677,7 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 			ProgressBar->SetVisibility(EVisibility::Hidden);
 			StatusText->SetVisibility(EVisibility::Hidden);
 		},
-		2.0f, // Ẩn sau 2 giây
+		2.0f, // Hide after 2 seconds
 		false
 	);
 
@@ -683,22 +685,22 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 	{
 		if (UTexture2D* LoadedTexture = FImageUtils::ImportFileAsTexture2D(FinalImagePath))
 		{
-			// 1. Tạo một FDeferredCleanupSlateBrush và lưu nó vào biến thành viên để quản lý vòng đời.
-			//    Hàm CreateBrush trả về TSharedRef, chúng ta gán nó cho TSharedPtr.
+			// 1) Create an FDeferredCleanupSlateBrush and store it in a member for lifetime management.
+			//    CreateBrush returns TSharedRef, and we store it as TSharedPtr.
 			FinalImageBrushSource = FDeferredCleanupSlateBrush::CreateBrush(
 				LoadedTexture,
 				FVector2D(LoadedTexture->GetSizeX(), LoadedTexture->GetSizeY())
 			);
 
-			// 2. Lấy con trỏ FSlateBrush* từ bên trong nó và gán cho SImage.
+			// 2) Get the inner FSlateBrush* and assign it to SImage.
 			FinalImageView->SetImage(FinalImageBrushSource->GetSlateBrush());
 			ImageContainer->SetVisibility(EVisibility::Visible);
 
-			UE_LOG(LogTemp, Log, TEXT("Successfully loaded and displayed image from %s"), *FinalImagePath);
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully loaded and displayed image from %s"), *FinalImagePath);
 		}
 		else
 		{
-			UE_LOG(LogTemp, Error, TEXT("Failed to load texture from file %s"), *FinalImagePath);
+			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load texture from file %s"), *FinalImagePath);
 			ImageContainer->SetVisibility(EVisibility::Collapsed);
 		}
 	}
@@ -729,7 +731,7 @@ FReply SMinimapGeneratorWindow::OnBackgroundColorBlockMouseButtonDown(const FGeo
 	if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
 		FColorPickerArgs PickerArgs;
-		PickerArgs.bUseAlpha = true; // Cho phép chọn cả độ trong suốt
+		PickerArgs.bUseAlpha = true; // Allow selecting alpha/transparency.
 		PickerArgs.DisplayGamma = TAttribute<float>(2.2f);
 		PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateSP(
 			this, &SMinimapGeneratorWindow::OnBackgroundColorChanged);
@@ -801,11 +803,11 @@ EVisibility SMinimapGeneratorWindow::GetTilingSettingsVisibility() const
 
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 {
-	UE_LOG(LogTemp, Log, TEXT("Start Capture button clicked."));
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Start Capture button clicked."));
 
 	StartButton->SetEnabled(false);
 
-	// Thu thập dữ liệu từ tất cả các widget UI
+	// Collect values from all UI widgets.
 	Settings.CaptureBounds = FBox(
 		FVector(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue()),
 		FVector(BoundsMaxX->GetValue(), BoundsMaxY->GetValue(), BoundsMaxZ->GetValue())
@@ -829,7 +831,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
 	Settings.CameraHeight = CameraHeight->GetValue();
-	// Chú ý thứ tự (Pitch, Yaw, Roll) của constructor FRotator
+	// Note FRotator constructor argument order: (Pitch, Yaw, Roll).
 	Settings.CameraRotation = FRotator(
 		RotationPitchSpinBox->GetValue(),
 		RotationYawSpinBox->GetValue(),
@@ -855,6 +857,14 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		Settings.ScreenSpaceReflectionQuality = SSRQualitySpinBox->GetValue();
 	}
 	Settings.ActorTagFilter = FName(*ActorTagFilterTextBox->GetText().ToString());
+	UE_LOG(OBPanoramicMinimapGenerator, Log,
+		TEXT("Capture settings: Output=%dx%d, Tiling=%s, TileRes=%d, TileOverlap=%d, ImportAsset=%s, OutputPath=%s, FileName=%s"),
+		Settings.OutputWidth, Settings.OutputHeight,
+		Settings.bUseTiling ? TEXT("true") : TEXT("false"),
+		Settings.TileResolution, Settings.TileOverlap,
+		Settings.bImportAsTextureAsset ? TEXT("true") : TEXT("false"),
+		*Settings.OutputPath, *Settings.FileName);
+
 	ProgressBar->SetVisibility(EVisibility::Visible);
 	StatusText->SetVisibility(EVisibility::Visible);
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);
@@ -877,7 +887,7 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList()
 
 	if (ActorsToAdd.Num() > 0)
 	{
-		// Để tránh độ phức tạp O(N^2), chúng ta dùng TSet để kiểm tra trùng lặp hiệu quả.
+		// Use TSet to avoid O(N^2) duplicate checks.
 		TSet<FString> ExistingActorLabels;
 		for (const TSharedPtr<FString>& NamePtr : ShowOnlyActorNames)
 		{
@@ -892,7 +902,7 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList()
 		{
 			if (Actor)
 			{
-				// TSet::Contains() cực kỳ nhanh (O(1) trung bình)
+				// TSet::Contains() is very fast (average O(1)).
 				if (const FString ActorLabel = Actor->GetActorLabel(); !ExistingActorLabels.Contains(ActorLabel))
 				{
 					ExistingActorLabels.Add(ActorLabel);
@@ -907,6 +917,8 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToShowOnlyList()
 		if (bListChanged)
 		{
 			ShowOnlyActorsListView->RequestListRefresh();
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Added %d selected actor(s) to ShowOnly list."),
+				ActorsToAdd.Num());
 		}
 	}
 	return FReply::Handled();
@@ -920,7 +932,7 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToHiddenList()
 
 	if (ActorsToAdd.Num() > 0)
 	{
-		// Tương tự, dùng TSet để tối ưu
+		// Same optimization: use TSet for efficient lookups.
 		TSet<FString> ExistingActorLabels;
 		for (const TSharedPtr<FString>& NamePtr : HiddenActorNames)
 		{
@@ -949,6 +961,8 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToHiddenList()
 		if (bListChanged)
 		{
 			HiddenActorsListView->RequestListRefresh();
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Added %d selected actor(s) to Hidden list."),
+				ActorsToAdd.Num());
 		}
 	}
 	return FReply::Handled();
@@ -956,10 +970,10 @@ FReply SMinimapGeneratorWindow::OnAddSelectedToHiddenList()
 
 FReply SMinimapGeneratorWindow::OnRemoveSelectedFromShowOnlyList()
 {
-	// Lấy danh sách các item (TSharedPtr<FString>) đang được chọn
+	// Get the currently selected items (TSharedPtr<FString>).
 	if (TArray<TSharedPtr<FString>> SelectedItems = ShowOnlyActorsListView->GetSelectedItems(); SelectedItems.Num() > 0)
 	{
-		// Tạo một Set chứa tên các actor cần xóa để tra cứu nhanh
+		// Build a set of actor names to remove for fast lookup.
 		TSet<FString> NamesToRemove;
 		for (const TSharedPtr<FString>& Item : SelectedItems)
 		{
@@ -969,24 +983,25 @@ FReply SMinimapGeneratorWindow::OnRemoveSelectedFromShowOnlyList()
 			}
 		}
 
-		// Xóa khỏi danh sách hiển thị trên UI (ShowOnlyActorNames)
+		// Remove from UI list (ShowOnlyActorNames).
 		ShowOnlyActorNames.RemoveAll([&NamesToRemove](const TSharedPtr<FString>& Item)
 		{
 			return Item.IsValid() && NamesToRemove.Contains(*Item);
 		});
 
-		// Xóa khỏi danh sách dữ liệu backend (Settings.ShowOnlyActors)
+		// Remove from backend list (Settings.ShowOnlyActors).
 		Settings.ShowOnlyActors.RemoveAll([&NamesToRemove](const TSoftObjectPtr<AActor>& ActorPtr)
 		{
 			if (const AActor* Actor = ActorPtr.Get())
 			{
 				return NamesToRemove.Contains(Actor->GetActorLabel());
 			}
-			return true; // Xóa cả các con trỏ không hợp lệ (nếu có)
+			return true; // Also remove invalid pointers if present.
 		});
 
-		// Yêu cầu ListView cập nhật lại giao diện
+		// Request ListView refresh.
 		ShowOnlyActorsListView->RequestListRefresh();
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Removed %d actor(s) from ShowOnly list."), SelectedItems.Num());
 	}
 
 	return FReply::Handled();
@@ -1020,6 +1035,7 @@ FReply SMinimapGeneratorWindow::OnRemoveSelectedFromHiddenList()
 		});
 
 		HiddenActorsListView->RequestListRefresh();
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Removed %d actor(s) from Hidden list."), SelectedItems.Num());
 	}
 
 	return FReply::Handled();
@@ -1027,6 +1043,7 @@ FReply SMinimapGeneratorWindow::OnRemoveSelectedFromHiddenList()
 
 FReply SMinimapGeneratorWindow::OnClearShowOnlyList()
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Clearing ShowOnly list."));
 	Settings.ShowOnlyActors.Empty();
 	ShowOnlyActorNames.Empty();
 	ShowOnlyActorsListView->RequestListRefresh();
@@ -1035,6 +1052,7 @@ FReply SMinimapGeneratorWindow::OnClearShowOnlyList()
 
 FReply SMinimapGeneratorWindow::OnClearHiddenList()
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Clearing Hidden list."));
 	Settings.HiddenActors.Empty();
 	HiddenActorNames.Empty();
 	HiddenActorsListView->RequestListRefresh();
@@ -1072,6 +1090,7 @@ FReply SMinimapGeneratorWindow::OnBrowseButtonClicked()
 		if (bFolderSelected)
 		{
 			OutputPath->SetText(FText::FromString(OutFolderName));
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Output directory selected: %s"), *OutFolderName);
 		}
 	}
 	return FReply::Handled();
@@ -1090,29 +1109,29 @@ FReply SMinimapGeneratorWindow::OnGetBoundsFromSelectionClicked()
 
 	if (Actors.Num() > 0)
 	{
-		// BẮT ĐẦU LOGIC NÂNG CẤP
-		// 1. Tạo một FBox không hợp lệ để bắt đầu
+		// UPGRADED BOUNDS LOGIC START
+		// 1) Start with an invalid FBox accumulator.
 		FBox CombinedBounds(ForceInit);
 
-		// 2. Lặp qua tất cả các actor đã chọn
+		// 2) Iterate over all selected actors.
 		for (AActor* SelectedActor : Actors)
 		{
 			if (SelectedActor)
 			{
-				// SỬA LỖI: Sử dụng hàm GetComponentsBoundingBox chính xác
-				// Tham số 'true' đầu tiên để bao gồm cả các component không có va chạm (visuals)
-				// Tham số 'true' thứ hai để bao gồm cả các Child Actor Component
+				// FIX: Use GetComponentsBoundingBox correctly.
+				// First 'true' includes non-collision visual components.
+				// Second 'true' includes child actor components.
 				const FBox ActorBounds = SelectedActor->GetComponentsBoundingBox(true, true);
 
-				// Thêm bounds của actor này vào bounds tổng hợp
+				// Merge this actor bounds into the combined bounds.
 				CombinedBounds += ActorBounds;
 			}
 		}
 
-		// 3. Kiểm tra xem bounds tổng hợp có hợp lệ không (ví dụ: nếu actor không có component nào)
+		// 3) Validate combined bounds (e.g. actors may have no components).
 		if (CombinedBounds.IsValid)
 		{
-			// Cập nhật giá trị cho các ô SSpinBox trên UI
+			// Update the SSpinBox values in the UI.
 			BoundsMinX->SetValue(CombinedBounds.Min.X);
 			BoundsMinY->SetValue(CombinedBounds.Min.Y);
 			BoundsMinZ->SetValue(CombinedBounds.Min.Z);
@@ -1121,16 +1140,16 @@ FReply SMinimapGeneratorWindow::OnGetBoundsFromSelectionClicked()
 			BoundsMaxY->SetValue(CombinedBounds.Max.Y);
 			BoundsMaxZ->SetValue(CombinedBounds.Max.Z);
 
-			UE_LOG(LogTemp, Log, TEXT("Updated bounds from %d selected actor(s)."), Actors.Num());
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Updated bounds from %d selected actor(s)."), Actors.Num());
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Selected actor(s) do not have valid bounds."));
+			UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("Selected actor(s) do not have valid bounds."));
 		}
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("No actors selected to get bounds from."));
+		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("No actors selected to get bounds from."));
 	}
 
 	return FReply::Handled();
@@ -1143,18 +1162,20 @@ bool SMinimapGeneratorWindow::IsPerspectiveMode() const
 
 void SMinimapGeneratorWindow::OnProjectionTypeChanged(ECheckBoxState NewState)
 {
-	// Không cần làm gì ở đây, vì thuộc tính IsEnabled của ô FOV đã được bind với hàm IsPerspectiveMode()
-	// Slate sẽ tự động cập nhật UI khi trạng thái của checkbox thay đổi.
+	// No extra logic is needed here because FOV IsEnabled is bound to IsPerspectiveMode().
+	// Slate updates the UI automatically when checkbox state changes.
 }
 
 void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile,
                                                 int32 TotalTiles)
 {
-	// Đây là hàm được gọi từ Manager thông qua delegate
+	// This function is called by manager delegates.
 	ProgressBar->SetPercent(Percentage);
 	StatusText->SetText(Status);
+	UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Capture progress: %s (%.2f%%), Tile %d/%d"),
+		*Status.ToString(), Percentage * 100.0f, CurrentTile, TotalTiles);
 
-	// 5. Kích hoạt lại nút khi quá trình hoàn tất (hoặc thất bại)
+	// Re-enable the button when the process finishes (success or failure).
 	if (Percentage >= 1.0f)
 	{
 		StartButton->SetEnabled(true);

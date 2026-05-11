@@ -1,7 +1,9 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
+
+DECLARE_LOG_CATEGORY_EXTERN(OBPanoramicMinimapGenerator, Log, All);
 
 class FPanoramicMinimapGeneratorEditorModule : public IModuleInterface
 {

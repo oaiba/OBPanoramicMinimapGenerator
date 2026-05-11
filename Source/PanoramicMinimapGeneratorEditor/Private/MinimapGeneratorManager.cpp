@@ -1,7 +1,8 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "MinimapGeneratorManager.h"
+#include "PanoramicMinimapGeneratorEditor.h"
 
 #include "Editor.h"
 #include "IImageWrapperModule.h"
@@ -95,11 +96,11 @@ public:
 			{
 				if (bSuccess)
 				{
-					UE_LOG(LogTemp, Log, TEXT("Debug tile saved successfully: %s"), *Path);
+					UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Debug tile saved successfully: %s"), *Path);
 				}
 				else
 				{
-					UE_LOG(LogTemp, Error, TEXT("Failed to save debug tile: %s"), *Path);
+					UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to save debug tile: %s"), *Path);
 				}
 			});
 		}
@@ -108,7 +109,7 @@ public:
 			// Log failure
 			AsyncTask(ENamedThreads::GameThread, [Path = this->FullPath]
 			{
-				UE_LOG(LogTemp, Error, TEXT("ImageWrapper failed for debug tile: %s"), *Path);
+				UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("ImageWrapper failed for debug tile: %s"), *Path);
 			});
 		}
 	}
@@ -144,7 +145,7 @@ void SaveDebugTileImage(const FString& BasePath, const FString& BaseFileName, co
 
 void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings& InSettings)
 {
-	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
+	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
 	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
 	if (Settings.bUseTiling)
@@ -161,12 +162,12 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 {
 	if (bSuccess)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
 		OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("Async save task failed."));
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Async save task failed."));
 		OnProgress.Broadcast(FText::FromString(TEXT("Failed!")), 1.0f, 0, 0);
 	}
 	OnCaptureComplete.Broadcast(bSuccess, SavedImagePath);
@@ -187,7 +188,7 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 		TArray<uint8> PngData;
 		if (!FFileHelper::LoadFileToArray(PngData, *SavedImagePath))
 		{
-			UE_LOG(LogTemp, Error, TEXT("Failed to load saved PNG file from disk: %s"), *SavedImagePath);
+			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load saved PNG file from disk: %s"), *SavedImagePath);
 			return;
 		}
 
@@ -214,7 +215,7 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 					TEXT("AssetRegistry"));
 				AssetRegistryModule.AssetCreated(NewTexture);
 
-				UE_LOG(LogTemp, Log, TEXT("Successfully created texture asset: %s"), *FullAssetPath);
+				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully created texture asset: %s"), *FullAssetPath);
 
 				TArray<UObject*> AssetsToSync;
 				AssetsToSync.Add(NewTexture);
@@ -227,19 +228,24 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 		}
 		else
 		{
-			UE_LOG(LogTemp, Error, TEXT("Failed to decode PNG data from file: %s"), *SavedImagePath);
+			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to decode PNG data from file: %s"), *SavedImagePath);
 		}
 	}
 }
 
 // ===================================================================
-// LOGIC 1: SINGLE CAPTURE 
+// FLOW 1: SINGLE CAPTURE
 // ===================================================================
 
 void UMinimapGeneratorManager::StartSingleCaptureForValidation()
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting single capture validation flow."));
 	const UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!World) return;
+	if (!World)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to start single capture: editor world is null."));
+		return;
+	}
 
 	ActiveRenderTarget = CreateRenderTarget();
 	if (!ActiveRenderTarget.IsValid()) return;
@@ -252,7 +258,7 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation()
 }
 
 // ===================================================================
-// CÁC HÀM HELPER CHUNG
+// SHARED HELPER FUNCTIONS
 // ===================================================================
 
 UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
@@ -273,7 +279,7 @@ UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 
 	RenderTarget->InitCustomFormat(TargetWidth, TargetHeight, PF_FloatRGBA, true);
 
-	UE_LOG(LogTemp, Log, TEXT("Created Render Target (%dx%d)."), TargetWidth, TargetHeight);
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Created Render Target (%dx%d)."), TargetWidth, TargetHeight);
 	return RenderTarget;
 }
 
@@ -336,7 +342,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	}
 	else
 	{
-		// Giữ nguyên logic cũ khi không override
+		// Keep legacy behavior when quality override is disabled.
 		CaptureComponent->CaptureSource = SCS_FinalColorLDR;
 		// CaptureComponent->CaptureSource = SCS_SceneColorHDRNoAlpha;
 	}
@@ -346,6 +352,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 
 void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Scheduling GPU readback for captured render target."));
 	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
 	if (!RenderTarget || !RenderTarget->GetResource())
 	{
@@ -391,6 +398,7 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 {
 	if (ReadbackFence.IsFenceComplete())
 	{
+		UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Readback fence completed."));
 		const UWorld* World = GEditor->GetEditorWorldContext().World();
 		World->GetTimerManager().ClearTimer(ReadbackPollTimer);
 
@@ -403,7 +411,7 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 
 		if (StagingPixelBuffer.Num() > 0)
 		{
-			UE_LOG(LogTemp, Log, TEXT("GPU readback complete. Starting async save task."));
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("GPU readback complete. Starting async save task."));
 			StartImageSaveTask(MoveTemp(StagingPixelBuffer), Settings.OutputWidth, Settings.OutputHeight);
 			OnProgress.Broadcast(FText::FromString(TEXT("Saving image...")), 0.95f, 0, 0);
 		}
@@ -426,6 +434,7 @@ void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData, int3
 	FinalFileName += TEXT(".png");
 
 	const FString FullPath = FPaths::Combine(Settings.OutputPath, FinalFileName);
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting async image save task: %s (%dx%d)."), *FullPath, ImageWidth, ImageHeight);
 
 	(new FAutoDeleteAsyncTask<FSaveImageTask>(MoveTemp(PixelData), ImageWidth, ImageHeight, FullPath, this))->
 		StartBackgroundTask();
@@ -437,7 +446,7 @@ void UMinimapGeneratorManager::BuildFinalShowOnlyList(TArray<AActor*>& OutShowOn
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World) return;
 
-	// 1. Xác định Nguồn (Source Pool)
+	// 1) Determine the source pool.
 	TArray<AActor*> CandidateActors;
 	TArray<AActor*> ExplicitShowOnlyList;
 	for (const TSoftObjectPtr<AActor>& ActorPtr : Settings.ShowOnlyActors)
@@ -450,18 +459,18 @@ void UMinimapGeneratorManager::BuildFinalShowOnlyList(TArray<AActor*>& OutShowOn
 
 	if (ExplicitShowOnlyList.Num() > 0)
 	{
-		// Nếu danh sách ShowOnly có phần tử, nguồn của chúng ta là danh sách này
+		// If ShowOnly contains actors, use it as the candidate source.
 		CandidateActors = ExplicitShowOnlyList;
 	}
 	else
 	{
-		// Nếu không, nguồn là tất cả các actor trong world
+		// Otherwise, use all actors in the world as the candidate source.
 		UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), CandidateActors);
 	}
 
-	// 2. Xây dựng một tập hợp (Set) các actor cần ẩn để tra cứu nhanh
+	// 2) Build a set of actors to hide for fast lookup.
 	TSet<AActor*> ActorsToHide;
-	// Thêm từ danh sách HiddenActors
+	// Add explicit hidden actors.
 	for (const TSoftObjectPtr<AActor>& ActorPtr : Settings.HiddenActors)
 	{
 		if (AActor* Actor = ActorPtr.Get())
@@ -470,28 +479,28 @@ void UMinimapGeneratorManager::BuildFinalShowOnlyList(TArray<AActor*>& OutShowOn
 		}
 	}
 
-	// 3. Lặp qua tất cả actor trong world để tìm các actor khớp với bộ lọc Class và Tag
-	// (Chúng ta cần lặp qua tất cả actor để đảm bảo bộ lọc "Hide by Class/Tag" hoạt động ngay cả khi ShowOnly list được dùng)
+	// 3) Scan all world actors and add matches from class/tag filters.
+	// We still do this even when ShowOnly is used so Hide-by-Class/Tag always applies.
 	TArray<AActor*> AllActors;
 	UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
 	for (AActor* Actor : AllActors)
 	{
 		if (!Actor) continue;
 
-		// Ẩn nếu khớp Class Filter
+		// Hide actors matching the class filter.
 		if (Settings.ActorClassFilter && Actor->IsA(Settings.ActorClassFilter))
 		{
 			ActorsToHide.Add(Actor);
 		}
 
-		// Ẩn nếu khớp Tag Filter
+		// Hide actors matching the tag filter.
 		if (!Settings.ActorTagFilter.IsNone() && Actor->Tags.Contains(Settings.ActorTagFilter))
 		{
 			ActorsToHide.Add(Actor);
 		}
 	}
 
-	// 4. Lọc lần cuối: Lặp qua nguồn và chỉ giữ lại những actor không nằm trong danh sách cần ẩn
+	// 4) Final pass: keep only candidates that are not in the hide set.
 	for (AActor* Candidate : CandidateActors)
 	{
 		if (Candidate && !ActorsToHide.Contains(Candidate))
@@ -499,14 +508,18 @@ void UMinimapGeneratorManager::BuildFinalShowOnlyList(TArray<AActor*>& OutShowOn
 			OutShowOnlyList.Add(Candidate);
 		}
 	}
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Built final ShowOnly list: %d actors (candidates: %d, hidden: %d)."),
+		OutShowOnlyList.Num(), CandidateActors.Num(), ActorsToHide.Num());
 }
 
 // ===================================================================
-// LOGIC 2: TILED CAPTURE
+// FLOW 2: TILED CAPTURE
 // ===================================================================
 
 void UMinimapGeneratorManager::StartTiledCaptureProcess()
 {
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting tiled capture process."));
 	CurrentTileIndex = 0;
 	CapturedTileData.Empty();
 	ActiveCaptureActor.Reset();
@@ -550,7 +563,7 @@ void UMinimapGeneratorManager::CalculateGrid()
 		            ? 1
 		            : (1 + FMath::CeilToInt(
 			            static_cast<float>(Settings.OutputHeight - Settings.TileResolution) / EffectiveTileRes));
-	UE_LOG(LogTemp, Log, TEXT("Calculated Grid: %d x %d tiles"), NumTilesX, NumTilesY);
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Calculated Grid: %d x %d tiles"), NumTilesX, NumTilesY);
 }
 
 void UMinimapGeneratorManager::CaptureNextTile()
@@ -569,6 +582,7 @@ void UMinimapGeneratorManager::CaptureNextTile()
 
 	const int32 TileX = CurrentTileIndex % NumTilesX;
 	const int32 TileY = CurrentTileIndex / NumTilesX;
+	UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Capturing tile index %d (%d, %d)."), CurrentTileIndex, TileX, TileY);
 
 	// 1. Calculate the consistent World Units Per Pixel (WUPP)
 	// We use the maximum dimension of the World Bounds and the Output Resolution to get a single, 
@@ -596,7 +610,7 @@ void UMinimapGeneratorManager::CaptureNextTile()
 		TileY * StepWorldY + TileOrthoSize * 0.5f,
 		Settings.CameraHeight);
 
-	// 5. Configure the Capture Actor
+	// 5. Configure the capture actor.
 	ActiveCaptureActor->SetActorLocation(TileCenterLocation);
 	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D();
 
@@ -647,21 +661,25 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 		const int32 TileX = CurrentTileIndex % NumTilesX;
 		const int32 TileY = CurrentTileIndex / NumTilesX;
 
-		// If the user wants to save debug tiles, do it here.
+		// Save individual debug tiles if enabled.
 		if (Settings.bSaveTiles)
 		{
-			// Get the base filename without timestamp or extension
+			// Use base file name without extension for per-tile output.
 			const FString BaseFileName = Settings.FileName;
 			if (Settings.bUseAutoFilename)
 			{
-				// In case auto-filename is used, we just use the base name without a timestamp for the tiles
-				// to keep it clean. You could add a timestamp here too if desired.
+				// Keep debug tile names clean even when auto filename is enabled.
 			}
 
 			SaveDebugTileImage(Settings.OutputPath, BaseFileName, TilePixels, TileX, TileY, Settings.TileResolution);
 		}
 
 		CapturedTileData.Add(FIntPoint(TileX, TileY), MoveTemp(TilePixels));
+		UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Tile (%d, %d) captured and stored."), TileX, TileY);
+	}
+	else
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("Tile %d rendered with empty pixel data."), CurrentTileIndex);
 	}
 
 	CurrentTileIndex++;
@@ -670,7 +688,7 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 
 void UMinimapGeneratorManager::StartStitching()
 {
-	UE_LOG(LogTemp, Log, TEXT("All tiles captured. Starting stitching process..."));
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("All tiles captured. Starting stitching process..."));
 	OnProgress.Broadcast(FText::FromString(TEXT("Stitching tiles...")), 0.9f, 0, 0);
 
 	if (ActiveCaptureActor.IsValid())
@@ -682,14 +700,14 @@ void UMinimapGeneratorManager::StartStitching()
 
 	if (CapturedTileData.Num() == 0)
 	{
-		UE_LOG(LogTemp, Error, TEXT("No tile data was captured. Aborting stitching."));
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("No tile data was captured. Aborting stitching."));
 		OnCaptureComplete.Broadcast(false, TEXT("No tile data was captured."));
 		return;
 	}
 
 	TArray<FColor> FinalImageData;
 	FinalImageData.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
-	// Initialize the final image with background color for proper blending
+	// Initialize final image with the configured background color for correct blending.
 	const FColor BackgroundColor = (Settings.BackgroundMode == EMinimapBackgroundMode::Transparent)
 		                               ? FColor::Transparent
 		                               : Settings.BackgroundColor.ToFColor(true);
@@ -702,7 +720,7 @@ void UMinimapGeneratorManager::StartStitching()
 	const int32 EffectiveTileRes = Settings.TileResolution - Settings.TileOverlap;
 	const bool bIsPortrait = Settings.OutputHeight > Settings.OutputWidth;
 
-	// Sort tiles from left to right, top to bottom to ensure proper blending
+	// Sort tiles from left-to-right and top-to-bottom for deterministic blending.
 	TArray<FIntPoint> SortedTileCoords;
 	CapturedTileData.GetKeys(SortedTileCoords);
 	SortedTileCoords.Sort([](const FIntPoint& A, const FIntPoint& B)
@@ -745,34 +763,34 @@ void UMinimapGeneratorManager::StartStitching()
 					float BlendAlphaX = 1.0f;
 					float BlendAlphaY = 1.0f;
 
-					// Calculate the blend factor for X axis (left overlap region)
+					// Calculate blend factor for X axis overlap.
 					if (TileCoord.X > 0 && x < Settings.TileOverlap)
 					{
 						BlendAlphaX = static_cast<float>(x) / FMath::Max(1, Settings.TileOverlap - 1);
 					}
 
-					// Calculate the blend factor for Y axis (top overlap region)
+					// Calculate blend factor for Y axis overlap.
 					if (TileCoord.Y > 0 && y < Settings.TileOverlap)
 					{
 						BlendAlphaY = static_cast<float>(y) / FMath::Max(1, Settings.TileOverlap - 1);
 					}
 
-					// Choose the minimum blend factor to create smooth diagonal corners 
+					// Use the minimum factor to smooth diagonal overlap corners.
 					if (const float FinalBlendAlpha = FMath::Min(BlendAlphaX, BlendAlphaY); FinalBlendAlpha < 1.0f)
 					{
 						// === START OF FIXED BLENDING LOGIC ===
-						// 1. Get existing color at the destination position
+						// 1) Read existing destination color.
 						const FColor& DstPixelColor = FinalImageData[DstIndex];
 
-						// 2. Convert both FColor to FLinearColor
+						// 2) Convert both colors to linear space.
 						const FLinearColor DstLinear = DstPixelColor; // Automatic conversion
 						const FLinearColor SrcLinear = SrcPixelColor; // Automatic conversion 
 
-						// 3. Perform Lerp in Linear space (using HSV for better colors)
+						// 3) Blend in linear space (HSV interpolation for smoother colors).
 						const FLinearColor BlendedLinear = FLinearColor::LerpUsingHSV(
 							DstLinear, SrcLinear, FinalBlendAlpha);
 
-						// 4. Convert the result back to FColor and write to image
+						// 4) Convert back to FColor and write to the destination image.
 						FinalImageData[DstIndex] = BlendedLinear.ToFColor(true);
 					}
 					else
@@ -792,7 +810,7 @@ void UMinimapGeneratorManager::StartStitching()
 
 void UMinimapGeneratorManager::OnAllTasksCompleted()
 {
-	UE_LOG(LogTemp, Warning, TEXT("[%s::%s] - All tiles captured. Starting stitching process."), *GetName(),
+	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - All tiles captured. Starting stitching process."), *GetName(),
 	       *FString(__FUNCTION__));
 
 	if (ScreenshotCapturedDelegateHandle.IsValid())
@@ -813,7 +831,7 @@ bool UMinimapGeneratorManager::SaveFinalImage(const TArray<FColor>& ImageData, i
 	if (!ImageWrapper.IsValid() || !ImageWrapper->SetRaw(ImageData.GetData(), ImageData.Num() * sizeof(FColor), Width,
 	                                                     Height, ERGBFormat::BGRA, 8))
 	{
-		UE_LOG(LogTemp, Error, TEXT("Failed to set raw image data for PNG wrapper."));
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to set raw image data for PNG wrapper."));
 		return false;
 	}
 
