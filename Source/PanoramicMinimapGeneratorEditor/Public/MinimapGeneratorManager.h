@@ -141,6 +141,9 @@ public:
 	FOnMinimapProgress OnProgress;
 	FOnMinimapCaptureComplete OnCaptureComplete;
 	
+	// Cancel an ongoing capture process
+	void CancelCapture();
+	
 	// Callback function when the async save task is complete
 	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath) const;
 private:
@@ -205,6 +208,7 @@ private:
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
 
 	bool bIsSingleCaptureMode = false;
+	bool bCancelRequested = false;
 
 	TWeakObjectPtr<ASceneCapture2D> ActiveCaptureActor;
 	TWeakObjectPtr<UTextureRenderTarget2D> ActiveRenderTarget;

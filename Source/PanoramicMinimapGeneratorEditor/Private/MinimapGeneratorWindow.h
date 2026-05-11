@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -32,7 +32,9 @@ private:
 
 	/** Called when the "Start Capture" button is clicked. */
 	FReply OnStartCaptureClicked();
+	FReply OnCancelCaptureClicked();
 	FReply OnBrowseButtonClicked();
+	FReply OnOpenFolderClicked();
 	FReply OnGetBoundsFromSelectionClicked();
 	void OnProjectionTypeChanged(ECheckBoxState NewState);
 	bool IsPerspectiveMode() const;
@@ -77,6 +79,9 @@ private:
 	void OnOutputWidthChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo);
 	void OnOutputHeightChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo);
 	
+	// Presets
+	FReply OnResolutionPresetClicked(int32 Res);
+	
 	TSharedPtr<SCheckBox> ImportAsAssetCheckbox;
 	TSharedPtr<SEditableTextBox> AssetPathTextBox;
 	EVisibility GetAssetPathVisibility() const;
@@ -98,6 +103,12 @@ private:
 	TSharedPtr<SSpinBox<float>> RotationYawSpinBox;
 	TSharedPtr<SCheckBox> IsOrthographicCheckbox;
 	TSharedPtr<SSpinBox<float>> CameraFOV;
+	
+	// Orthographic Image Rotation
+	TSharedPtr<SSpinBox<float>> ImageRotationSpinBox;
+	void OnImageRotationChanged(float NewValue);
+	FReply OnRotationPresetClicked(float Angle);
+	EVisibility GetImageRotationVisibility() const;
 
 	// Quality Settings
 	TSharedPtr<SCheckBox> CaptureDynamicShadowsCheckbox; 
@@ -145,10 +156,28 @@ private:
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;
 	TSharedPtr<SButton> StartButton;
+	TSharedPtr<SButton> CancelButton;
 
 	TSharedPtr<SBox> ImageContainer; // Container used for simple show/hide behavior.
-	TSharedPtr<SImage> FinalImageView;
+	TSharedPtr<SWidgetSwitcher> PreviewSwitcher;
+	TSharedPtr<SImage> FinalImageView; // Fit to screen
+	TSharedPtr<SImage> ZoomedImageView; // Scrollable zoom
 	TSharedPtr<ISlateBrushSource> FinalImageBrushSource; // Keep brush source alive for lifetime management.
+	
+	// Post-capture UX
+	TSharedPtr<SButton> OpenFolderButton;
+	TSharedPtr<STextBlock> ImageInfoText;
+	FString LastSavedImagePath;
+
+	// Zoom functionality
+	float PreviewZoomFactor = 0.0f;
+	FReply OnZoomInClicked();
+	FReply OnZoomOutClicked();
+	FReply OnZoomFitClicked();
+	FReply OnZoom100Clicked();
+	FText GetZoomText() const;
+	FOptionalSize GetPreviewZoomedWidth() const;
+	FOptionalSize GetPreviewZoomedHeight() const;
 
 	// --- BACKEND LOGIC ---
 
@@ -160,4 +189,8 @@ private:
 	TStrongObjectPtr<UMinimapGeneratorManager> Manager;
 
 	FMinimapCaptureSettings Settings;
+	
+	// Settings Persistence
+	void SaveSettings() const;
+	void LoadSettings();
 };

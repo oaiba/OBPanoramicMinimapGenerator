@@ -26,6 +26,11 @@
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SSplitter.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Misc/MessageDialog.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/ConfigCacheIni.h"
 
 #define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
 
@@ -286,6 +291,52 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								.Value(90.f)
 								.IsEnabled(this, &SMinimapGeneratorWindow::IsPerspectiveMode)
 							]
+							+ SGridPanel::Slot(0, 5).HAlign(HAlign_Right).Padding(LabelPadding)
+							[
+								SNew(STextBlock).Text(LOCTEXT("ImageRotationLabel", "Image Rotation (Orthographic)"))
+								.Visibility(this, &SMinimapGeneratorWindow::GetImageRotationVisibility)
+							]
+							+ SGridPanel::Slot(1, 5)
+							[
+								SNew(SVerticalBox)
+								.Visibility(this, &SMinimapGeneratorWindow::GetImageRotationVisibility)
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 2)
+								[
+									SAssignNew(ImageRotationSpinBox, SSpinBox<float>)
+									.MinValue(-360.f)
+									.MaxValue(360.f)
+									.Value(0.f)
+									.OnValueChanged(this, &SMinimapGeneratorWindow::OnImageRotationChanged)
+								]
+								+ SVerticalBox::Slot().AutoHeight()
+								[
+									SNew(SHorizontalBox)
+									+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+									[
+										SNew(SButton)
+										.Text(LOCTEXT("Rot0", "0°"))
+										.OnClicked(this, &SMinimapGeneratorWindow::OnRotationPresetClicked, 0.f)
+									]
+									+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+									[
+										SNew(SButton)
+										.Text(LOCTEXT("Rot90", "90°"))
+										.OnClicked(this, &SMinimapGeneratorWindow::OnRotationPresetClicked, 90.f)
+									]
+									+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+									[
+										SNew(SButton)
+										.Text(LOCTEXT("Rot180", "180°"))
+										.OnClicked(this, &SMinimapGeneratorWindow::OnRotationPresetClicked, 180.f)
+									]
+									+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+									[
+										SNew(SButton)
+										.Text(LOCTEXT("Rot270", "270°"))
+										.OnClicked(this, &SMinimapGeneratorWindow::OnRotationPresetClicked, 270.f)
+									]
+								]
+							]
 						]
 					]
 
@@ -486,12 +537,91 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						[
 							SAssignNew(ImageContainer, SBox)
 							[
-								SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
+								SAssignNew(PreviewSwitcher, SWidgetSwitcher)
+								.WidgetIndex(0)
+								+ SWidgetSwitcher::Slot()
 								[
-									SAssignNew(FinalImageView, SImage)
+									SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
+									[
+										SAssignNew(FinalImageView, SImage)
+									]
+								]
+								+ SWidgetSwitcher::Slot()
+								[
+									SNew(SScrollBox)
+									.Orientation(Orient_Vertical)
+									+ SScrollBox::Slot()
+									[
+										SNew(SScrollBox)
+										.Orientation(Orient_Horizontal)
+										+ SScrollBox::Slot()
+										[
+											SNew(SBox)
+											.HAlign(HAlign_Center)
+											.VAlign(VAlign_Center)
+											.WidthOverride(this, &SMinimapGeneratorWindow::GetPreviewZoomedWidth)
+											.HeightOverride(this, &SMinimapGeneratorWindow::GetPreviewZoomedHeight)
+											[
+												SAssignNew(ZoomedImageView, SImage)
+											]
+										]
+									]
 								]
 							]
 						]
+					]
+				]
+				
+				// --- PREVIEW INFO & ACTIONS (Phase 5 + Zoom) ---
+				+ SVerticalBox::Slot().AutoHeight().Padding(5)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+					[
+						SAssignNew(ImageInfoText, STextBlock)
+						.Text(FText::GetEmpty())
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0).VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("ZoomOutBtn", "-"))
+						.OnClicked(this, &SMinimapGeneratorWindow::OnZoomOutClicked)
+						.ToolTipText(LOCTEXT("ZoomOutTooltip", "Zoom Out"))
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Text(this, &SMinimapGeneratorWindow::GetZoomText)
+						.MinDesiredWidth(40.0f)
+						.Justification(ETextJustify::Center)
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0).VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("ZoomInBtn", "+"))
+						.OnClicked(this, &SMinimapGeneratorWindow::OnZoomInClicked)
+						.ToolTipText(LOCTEXT("ZoomInTooltip", "Zoom In"))
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0).VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("Zoom100Btn", "100%"))
+						.OnClicked(this, &SMinimapGeneratorWindow::OnZoom100Clicked)
+						.ToolTipText(LOCTEXT("Zoom100Tooltip", "Actual Size"))
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0).VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("ZoomFitBtn", "Fit"))
+						.OnClicked(this, &SMinimapGeneratorWindow::OnZoomFitClicked)
+						.ToolTipText(LOCTEXT("ZoomFitTooltip", "Fit to Viewport"))
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SAssignNew(OpenFolderButton, SButton)
+						.Text(LOCTEXT("OpenFolderBtn", "Open Output Folder"))
+						.Visibility(EVisibility::Collapsed)
+						.OnClicked(this, &SMinimapGeneratorWindow::OnOpenFolderClicked)
 					]
 				]
 
@@ -510,6 +640,27 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					.BodyContent()
 					[
 						SNew(SGridPanel).FillColumn(1, 1.0f)
+						// --- PRESETS ---
+						+ SGridPanel::Slot(1, 0).Padding(0, 0, 0, 10)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0)
+							[
+								SNew(SButton).Text(LOCTEXT("Preset512", "512 (Mobile)")).OnClicked(this, &SMinimapGeneratorWindow::OnResolutionPresetClicked, 512)
+							]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0)
+							[
+								SNew(SButton).Text(LOCTEXT("Preset2048", "2048 (Standard)")).OnClicked(this, &SMinimapGeneratorWindow::OnResolutionPresetClicked, 2048)
+							]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0)
+							[
+								SNew(SButton).Text(LOCTEXT("Preset4096", "4096 (High)")).OnClicked(this, &SMinimapGeneratorWindow::OnResolutionPresetClicked, 4096)
+							]
+							+ SHorizontalBox::Slot().AutoWidth()
+							[
+								SNew(SButton).Text(LOCTEXT("Preset8192", "8192 (Ultra)")).OnClicked(this, &SMinimapGeneratorWindow::OnResolutionPresetClicked, 8192)
+							]
+						]
 						+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("OutputWidthLabel", "Output Width"))
@@ -649,10 +800,20 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
-				SAssignNew(StartButton, SButton)
-				.Text(LOCTEXT("StartCaptureButton", "Start Capture Process"))
-				.HAlign(HAlign_Center)
-				.OnClicked(this, &SMinimapGeneratorWindow::OnStartCaptureClicked)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Center)
+				[
+					SAssignNew(StartButton, SButton)
+					.Text(LOCTEXT("StartCaptureButton", "Start Capture Process"))
+					.OnClicked(this, &SMinimapGeneratorWindow::OnStartCaptureClicked)
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(5, 0, 0, 0)
+				[
+					SAssignNew(CancelButton, SButton)
+					.Text(LOCTEXT("CancelCaptureButton", "Cancel"))
+					.Visibility(EVisibility::Collapsed)
+					.OnClicked(this, &SMinimapGeneratorWindow::OnCancelCaptureClicked)
+				]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
@@ -664,6 +825,9 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			]
 		]
 	];
+
+	// Load settings from config
+	LoadSettings();
 }
 
 void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath)
@@ -671,6 +835,8 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Capture completed. Success=%s, Path=%s"),
 		bSuccess ? TEXT("true") : TEXT("false"), *FinalImagePath);
 	StartButton->SetEnabled(true);
+	CancelButton->SetVisibility(EVisibility::Collapsed);
+
 	// Use a short timer to hide progress UI after completion.
 	// This lets users briefly see the final status ("Done!" or "Failed!").
 	GEditor->GetTimerManager()->SetTimer(
@@ -686,6 +852,15 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 
 	if (bSuccess && !FinalImagePath.IsEmpty() && IFileManager::Get().FileExists(*FinalImagePath))
 	{
+		LastSavedImagePath = FinalImagePath;
+		OpenFolderButton->SetVisibility(EVisibility::Visible);
+
+		// Get file size
+		const int64 FileSize = IFileManager::Get().FileSize(*FinalImagePath);
+		const FString FileSizeStr = FString::Printf(TEXT("%.2f MB"), FileSize / (1024.0f * 1024.0f));
+		ImageInfoText->SetText(FText::Format(LOCTEXT("ImageInfo", "{0}x{1} • {2} • PNG"),
+			*CurrentOutputWidth, *CurrentOutputHeight, FText::FromString(FileSizeStr)));
+
 		// Load and decompress the PNG on a background thread to avoid freezing the editor.
 		// A 4096x4096 PNG can take 2-5 seconds to decompress — doing this on the game thread
 		// would make the editor unresponsive.
@@ -747,6 +922,12 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 					FVector2D(LoadedTexture->GetSizeX(), LoadedTexture->GetSizeY())
 				);
 				StrongThis->FinalImageView->SetImage(StrongThis->FinalImageBrushSource->GetSlateBrush());
+				StrongThis->ZoomedImageView->SetImage(StrongThis->FinalImageBrushSource->GetSlateBrush());
+
+				// Reset zoom to "Fit" when a new capture finishes
+				StrongThis->PreviewZoomFactor = 0.0f;
+				StrongThis->PreviewSwitcher->SetActiveWidgetIndex(0);
+
 				StrongThis->ImageContainer->SetVisibility(EVisibility::Visible);
 
 				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully loaded and displayed preview image from %s (async)."), *ImagePath);
@@ -756,6 +937,17 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 	else
 	{
 		ImageContainer->SetVisibility(EVisibility::Collapsed);
+		ImageInfoText->SetText(FText::GetEmpty());
+		OpenFolderButton->SetVisibility(EVisibility::Collapsed);
+	}
+}
+
+void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles)
+{
+	if (ProgressBar.IsValid() && StatusText.IsValid())
+	{
+		ProgressBar->SetPercent(Percentage);
+		StatusText->SetText(Status);
 	}
 }
 
@@ -850,11 +1042,128 @@ EVisibility SMinimapGeneratorWindow::GetTilingSettingsVisibility() const
 	return UseTilingCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
+// START ZOOM FUNCTIONALITY
+FReply SMinimapGeneratorWindow::OnZoomInClicked()
+{
+	if (PreviewZoomFactor == 0.0f) PreviewZoomFactor = 1.0f;
+	PreviewZoomFactor = FMath::Min(PreviewZoomFactor * 1.25f, 10.0f);
+	PreviewSwitcher->SetActiveWidgetIndex(1);
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnZoomOutClicked()
+{
+	if (PreviewZoomFactor == 0.0f) PreviewZoomFactor = 1.0f;
+	PreviewZoomFactor = FMath::Max(PreviewZoomFactor / 1.25f, 0.1f);
+	PreviewSwitcher->SetActiveWidgetIndex(1);
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnZoomFitClicked()
+{
+	PreviewZoomFactor = 0.0f;
+	PreviewSwitcher->SetActiveWidgetIndex(0);
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnZoom100Clicked()
+{
+	PreviewZoomFactor = 1.0f;
+	PreviewSwitcher->SetActiveWidgetIndex(1);
+	return FReply::Handled();
+}
+
+FText SMinimapGeneratorWindow::GetZoomText() const
+{
+	if (PreviewZoomFactor == 0.0f) return LOCTEXT("ZoomFit", "Fit");
+	return FText::FromString(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(PreviewZoomFactor * 100.0f)));
+}
+
+FOptionalSize SMinimapGeneratorWindow::GetPreviewZoomedWidth() const
+{
+	if (FinalImageBrushSource.IsValid())
+	{
+		return FOptionalSize(FinalImageBrushSource->GetSlateBrush()->ImageSize.X * PreviewZoomFactor);
+	}
+	return FOptionalSize(512.f * PreviewZoomFactor);
+}
+
+FOptionalSize SMinimapGeneratorWindow::GetPreviewZoomedHeight() const
+{
+	if (FinalImageBrushSource.IsValid())
+	{
+		return FOptionalSize(FinalImageBrushSource->GetSlateBrush()->ImageSize.Y * PreviewZoomFactor);
+	}
+	return FOptionalSize(512.f * PreviewZoomFactor);
+}
+// END ZOOM FUNCTIONALITY
+
+FReply SMinimapGeneratorWindow::OnResolutionPresetClicked(int32 Res)
+{
+	for (auto& Option : ResolutionOptions)
+	{
+		if (*Option == Res)
+		{
+			CurrentOutputWidth = Option;
+			CurrentOutputHeight = Option;
+			OutputWidthComboBox->SetSelectedItem(Option);
+			OutputHeightComboBox->SetSelectedItem(Option);
+			break;
+		}
+	}
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnOpenFolderClicked()
+{
+	if (!LastSavedImagePath.IsEmpty())
+	{
+		FPlatformProcess::ExploreFolder(*LastSavedImagePath);
+	}
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnCancelCaptureClicked()
+{
+	if (Manager.IsValid())
+	{
+		Manager->CancelCapture();
+	}
+	return FReply::Handled();
+}
+
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Start Capture button clicked."));
 
+	// Validation
+	const FVector MinBounds(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue());
+	const FVector MaxBounds(BoundsMaxX->GetValue(), BoundsMaxY->GetValue(), BoundsMaxZ->GetValue());
+	if (MinBounds.X >= MaxBounds.X || MinBounds.Y >= MaxBounds.Y)
+	{
+		FMessageDialog::Open(EAppMsgType::Ok,
+			LOCTEXT("InvalidBoundsMsg", "Capture region is invalid. Min bounds must be less than Max bounds on X and Y axes.\n\nTip: Use 'Get Bounds from Selected Actor' to auto-fill."));
+		return FReply::Handled();
+	}
+
+	FString PathStr = OutputPath->GetText().ToString();
+	if (PathStr.IsEmpty())
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("EmptyPathMsg", "Output path cannot be empty."));
+		return FReply::Handled();
+	}
+
+	if (!IFileManager::Get().DirectoryExists(*PathStr))
+	{
+		if (!IFileManager::Get().MakeDirectory(*PathStr, true))
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("InvalidPathMsg", "Output path does not exist and could not be created."));
+			return FReply::Handled();
+		}
+	}
+
 	StartButton->SetEnabled(false);
+	CancelButton->SetVisibility(EVisibility::Visible);
 
 	// Collect values from all UI widgets.
 	Settings.CaptureBounds = FBox(
@@ -918,11 +1227,111 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	StatusText->SetVisibility(EVisibility::Visible);
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);
 
-	Manager->StartCaptureProcess(Settings);
-	// Manager->StartSingleCaptureForValidation(Settings);
+	SaveSettings(); // Save user preferences when a capture successfully starts
 
+	Manager->StartCaptureProcess(Settings);
 	return FReply::Handled();
 }
+
+// START SETTINGS PERSISTENCE
+void SMinimapGeneratorWindow::SaveSettings() const
+{
+	const FString ConfigPath = GEditorPerProjectIni;
+	const FString Section = TEXT("OBPanoramicMinimapGenerator");
+
+	GConfig->SetFloat(*Section, TEXT("BoundsMinX"), BoundsMinX->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("BoundsMinY"), BoundsMinY->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("BoundsMinZ"), BoundsMinZ->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("BoundsMaxX"), BoundsMaxX->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("BoundsMaxY"), BoundsMaxY->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("BoundsMaxZ"), BoundsMaxZ->GetValue(), ConfigPath);
+
+	GConfig->SetInt(*Section, TEXT("OutputWidth"), *CurrentOutputWidth, ConfigPath);
+	GConfig->SetInt(*Section, TEXT("OutputHeight"), *CurrentOutputHeight, ConfigPath);
+	GConfig->SetString(*Section, TEXT("OutputPath"), *OutputPath->GetText().ToString(), ConfigPath);
+	GConfig->SetString(*Section, TEXT("FileName"), *FileName->GetText().ToString(), ConfigPath);
+	GConfig->SetBool(*Section, TEXT("AutoFilename"), AutoFilenameCheckbox->IsChecked(), ConfigPath);
+	GConfig->SetBool(*Section, TEXT("ImportAsAsset"), ImportAsAssetCheckbox->IsChecked(), ConfigPath);
+	GConfig->SetString(*Section, TEXT("AssetPath"), *AssetPathTextBox->GetText().ToString(), ConfigPath);
+
+	GConfig->SetInt(*Section, TEXT("BackgroundMode"), static_cast<int32>(CurrentBackgroundMode), ConfigPath);
+	GConfig->SetColor(*Section, TEXT("BackgroundColor"), SelectedBackgroundColor.ToFColor(true), ConfigPath);
+
+	GConfig->SetBool(*Section, TEXT("UseTiling"), UseTilingCheckbox->IsChecked(), ConfigPath);
+	GConfig->SetInt(*Section, TEXT("TileResolution"), TileResolution->GetValue(), ConfigPath);
+	GConfig->SetInt(*Section, TEXT("TileOverlap"), TileOverlap->GetValue(), ConfigPath);
+
+	GConfig->SetFloat(*Section, TEXT("CameraHeight"), CameraHeight->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("RotationPitch"), RotationPitchSpinBox->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("RotationYaw"), RotationYawSpinBox->GetValue(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("RotationRoll"), RotationRollSpinBox->GetValue(), ConfigPath);
+	GConfig->SetBool(*Section, TEXT("IsOrthographic"), IsOrthographicCheckbox->IsChecked(), ConfigPath);
+	GConfig->SetFloat(*Section, TEXT("CameraFOV"), CameraFOV->GetValue(), ConfigPath);
+
+	GConfig->Flush(false, ConfigPath);
+}
+
+void SMinimapGeneratorWindow::LoadSettings()
+{
+	const FString ConfigPath = GEditorPerProjectIni;
+	const FString Section = TEXT("OBPanoramicMinimapGenerator");
+
+	float FloatVal = 0.0f;
+	int32 IntVal = 0;
+	FString StringVal;
+	bool bBoolVal = false;
+	FColor ColorVal;
+
+	if (GConfig->GetFloat(*Section, TEXT("BoundsMinX"), FloatVal, ConfigPath)) BoundsMinX->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("BoundsMinY"), FloatVal, ConfigPath)) BoundsMinY->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("BoundsMinZ"), FloatVal, ConfigPath)) BoundsMinZ->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("BoundsMaxX"), FloatVal, ConfigPath)) BoundsMaxX->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("BoundsMaxY"), FloatVal, ConfigPath)) BoundsMaxY->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("BoundsMaxZ"), FloatVal, ConfigPath)) BoundsMaxZ->SetValue(FloatVal);
+
+	if (GConfig->GetInt(*Section, TEXT("OutputWidth"), IntVal, ConfigPath))
+	{
+		for (auto& Res : ResolutionOptions)
+		{
+			if (*Res == IntVal) { CurrentOutputWidth = Res; OutputWidthComboBox->SetSelectedItem(Res); break; }
+		}
+	}
+	if (GConfig->GetInt(*Section, TEXT("OutputHeight"), IntVal, ConfigPath))
+	{
+		for (auto& Res : ResolutionOptions)
+		{
+			if (*Res == IntVal) { CurrentOutputHeight = Res; OutputHeightComboBox->SetSelectedItem(Res); break; }
+		}
+	}
+
+	if (GConfig->GetString(*Section, TEXT("OutputPath"), StringVal, ConfigPath)) OutputPath->SetText(FText::FromString(StringVal));
+	if (GConfig->GetString(*Section, TEXT("FileName"), StringVal, ConfigPath)) FileName->SetText(FText::FromString(StringVal));
+	if (GConfig->GetBool(*Section, TEXT("AutoFilename"), bBoolVal, ConfigPath)) AutoFilenameCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+	if (GConfig->GetBool(*Section, TEXT("ImportAsAsset"), bBoolVal, ConfigPath)) ImportAsAssetCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+	if (GConfig->GetString(*Section, TEXT("AssetPath"), StringVal, ConfigPath)) AssetPathTextBox->SetText(FText::FromString(StringVal));
+
+	if (GConfig->GetInt(*Section, TEXT("BackgroundMode"), IntVal, ConfigPath)) CurrentBackgroundMode = static_cast<EMinimapBackgroundMode>(IntVal);
+	if (GConfig->GetColor(*Section, TEXT("BackgroundColor"), ColorVal, ConfigPath)) SelectedBackgroundColor = FLinearColor(ColorVal);
+
+	if (GConfig->GetBool(*Section, TEXT("UseTiling"), bBoolVal, ConfigPath)) UseTilingCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+	if (GConfig->GetInt(*Section, TEXT("TileResolution"), IntVal, ConfigPath)) TileResolution->SetValue(IntVal);
+	if (GConfig->GetInt(*Section, TEXT("TileOverlap"), IntVal, ConfigPath)) TileOverlap->SetValue(IntVal);
+
+	if (GConfig->GetFloat(*Section, TEXT("CameraHeight"), FloatVal, ConfigPath)) CameraHeight->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("RotationPitch"), FloatVal, ConfigPath)) RotationPitchSpinBox->SetValue(FloatVal);
+	if (GConfig->GetFloat(*Section, TEXT("RotationYaw"), FloatVal, ConfigPath)) 
+	{
+		RotationYawSpinBox->SetValue(FloatVal);
+		if (ImageRotationSpinBox.IsValid())
+		{
+			ImageRotationSpinBox->SetValue(FloatVal);
+		}
+	}
+	if (GConfig->GetFloat(*Section, TEXT("RotationRoll"), FloatVal, ConfigPath)) RotationRollSpinBox->SetValue(FloatVal);
+	if (GConfig->GetBool(*Section, TEXT("IsOrthographic"), bBoolVal, ConfigPath)) IsOrthographicCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+	if (GConfig->GetFloat(*Section, TEXT("CameraFOV"), FloatVal, ConfigPath)) CameraFOV->SetValue(FloatVal);
+}
+// END SETTINGS PERSISTENCE
 
 // START FILTER LOGIC
 
@@ -1215,20 +1624,28 @@ void SMinimapGeneratorWindow::OnProjectionTypeChanged(ECheckBoxState NewState)
 	// Slate updates the UI automatically when checkbox state changes.
 }
 
-void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile,
-                                                int32 TotalTiles)
+EVisibility SMinimapGeneratorWindow::GetImageRotationVisibility() const
 {
-	// This function is called by manager delegates.
-	ProgressBar->SetPercent(Percentage);
-	StatusText->SetText(Status);
-	UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Capture progress: %s (%.2f%%), Tile %d/%d"),
-		*Status.ToString(), Percentage * 100.0f, CurrentTile, TotalTiles);
+	return IsOrthographicCheckbox.IsValid() && IsOrthographicCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
+}
 
-	// Re-enable the button when the process finishes (success or failure).
-	if (Percentage >= 1.0f)
+void SMinimapGeneratorWindow::OnImageRotationChanged(float NewValue)
+{
+	if (RotationYawSpinBox.IsValid())
 	{
-		StartButton->SetEnabled(true);
+		RotationYawSpinBox->SetValue(NewValue);
 	}
 }
+
+FReply SMinimapGeneratorWindow::OnRotationPresetClicked(float Angle)
+{
+	if (ImageRotationSpinBox.IsValid())
+	{
+		ImageRotationSpinBox->SetValue(Angle);
+		OnImageRotationChanged(Angle);
+	}
+	return FReply::Handled();
+}
+
 
 #undef LOCTEXT_NAMESPACE

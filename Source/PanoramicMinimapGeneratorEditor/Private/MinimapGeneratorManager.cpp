@@ -13,7 +13,6 @@
 #include "Engine/SceneCapture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "AssetRegistry/AssetRegistryModule.h"
-#include "Async/Async.h"
 #include "RHICommandList.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -145,6 +144,7 @@ void SaveDebugTileImage(const FString& BasePath, const FString& BaseFileName, co
 
 void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings& InSettings)
 {
+	bCancelRequested = false;
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
 	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
@@ -156,6 +156,35 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	{
 		StartSingleCaptureForValidation();
 	}
+}
+
+void UMinimapGeneratorManager::CancelCapture()
+{
+	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Capture process cancelled by user."), *GetName(), *FString(__FUNCTION__));
+	bCancelRequested = true;
+
+	if (GEditor)
+	{
+		GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
+		GEditor->GetTimerManager()->ClearTimer(StreamingCheckTimer);
+	}
+
+	if (ScreenshotCapturedDelegateHandle.IsValid())
+	{
+		FScreenshotRequest::OnScreenshotCaptured().Remove(ScreenshotCapturedDelegateHandle);
+		ScreenshotCapturedDelegateHandle.Reset();
+	}
+
+	if (ActiveCaptureActor.IsValid()) ActiveCaptureActor->Destroy();
+	ActiveCaptureActor.Reset();
+
+	if (ActiveRenderTarget.IsValid()) ActiveRenderTarget->ConditionalBeginDestroy();
+	ActiveRenderTarget.Reset();
+
+	StagingPixelBuffer.Empty();
+	CapturedTileData.Empty();
+
+	OnCaptureComplete.Broadcast(false, TEXT("Capture cancelled by user."));
 }
 
 void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath) const
@@ -432,6 +461,8 @@ void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 
 void UMinimapGeneratorManager::CheckReadbackStatus()
 {
+	if (bCancelRequested) return;
+
 	ReadbackPollCount++;
 
 	// Timeout safety: abort after ~15 seconds (150 polls at 0.1s interval)
@@ -648,6 +679,8 @@ void UMinimapGeneratorManager::CalculateGrid()
 
 void UMinimapGeneratorManager::CaptureNextTile()
 {
+	if (bCancelRequested) return;
+
 	if (CurrentTileIndex >= NumTilesX * NumTilesY)
 	{
 		StartStitching();
@@ -723,6 +756,8 @@ void UMinimapGeneratorManager::CaptureNextTile()
 
 void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 {
+	if (bCancelRequested) return;
+
 	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
 	if (!RenderTarget)
 	{
