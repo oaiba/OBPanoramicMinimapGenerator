@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -30,7 +30,6 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
 	int32 OutputHeight = 4096;
 
-	// === THÊM CÁC THUỘC TÍNH MỚI CHO TILING ===
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling")
 	bool bUseTiling = false;
 	
@@ -38,7 +37,7 @@ struct FMinimapCaptureSettings
 	int32 TileResolution = 2048;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
-	int32 TileOverlap = 64; // in pixels
+	int32 TileOverlap = 64;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debugging", meta = (
 	EditCondition = "bUseTiling", Tooltip = "If checked, saves each captured tile as a separate image for debugging the stitching process."))
@@ -52,7 +51,6 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality")
 	bool bCaptureDynamicShadows = true;
 
-	// === CÁC THUỘC TÍNH MỚI CHO OVERRIDE ===
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality|Overrides", meta = (EditCondition = "bOverrideWithHighQualitySettings"))
 	TEnumAsByte<ESceneCaptureSource> CaptureSource = SCS_FinalColorHDR;
 	
@@ -151,30 +149,33 @@ private:
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
 
-	// === CÁC HÀM HELPER MỚI CHO VIỆC CHỤP ẢNH ĐƠN LẺ ===
-	/** Tạo và cấu hình Render Target để vẽ vào. */
+	// === FUNCTIONS FOR SINGLE CAPTURE ===
+	/** Create and configure the Render Target to draw to. */
 	UTextureRenderTarget2D* CreateRenderTarget() const;
 
-	/** Tạo, cấu hình và định vị Scene Capture Actor. */
+	/** Spawn, configure, and position the Scene Capture Actor. */
 	ASceneCapture2D* SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget) const;
 
-	/** Được gọi bởi Timer để đọc pixel, dọn dẹp và bắt đầu lưu. */
+	/** Called by Timer to read pixels, clean up, and start saving. */
 	void ReadPixelsAndFinalize();
 
-	/** Tạo tên file cuối cùng và khởi động AsyncTask để lưu ảnh. */
+	/** Generate the final file name and start AsyncTask to save the image. */
 	void StartImageSaveTask(TArray<FColor> PixelData, int32 ImageWidth, int32 ImageHeight);
 	
-	// === THÊM HÀM VÀ BIẾN MỚI CHO ASYNC READBACK ===
-	/** Được gọi bởi Timer để kiểm tra xem GPU đã đọc xong pixel chưa */
+	// === ASYNC READBACK ===
+	/** Called by Timer to check if the GPU has finished reading pixels */
 	void CheckReadbackStatus();
 
-	/** Hàng rào để đồng bộ với Rendering Thread */
+	/** Fence to synchronize with the Rendering Thread */
 	FRenderCommandFence ReadbackFence;
 
-	/** Timer để "hỏi thăm" trạng thái của Fence */
+	/** Timer to poll readback fence completion */
 	FTimerHandle ReadbackPollTimer;
 
-	/** Buffer tạm thời để Rendering Thread ghi dữ liệu pixel vào */
+	/** Counter for readback polls — used for timeout detection */
+	int32 ReadbackPollCount = 0;
+
+	/** Staging buffer for the rendering thread to write pixel data into */
 	TArray<FColor> StagingPixelBuffer;
 	// ===========================================
 

@@ -248,13 +248,31 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation()
 	}
 
 	ActiveRenderTarget = CreateRenderTarget();
-	if (!ActiveRenderTarget.IsValid()) return;
+	if (!ActiveRenderTarget.IsValid())
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("%hs: CreateRenderTarget() returned invalid target. Aborting."), __FUNCTION__);
+		OnCaptureComplete.Broadcast(false, TEXT("Failed to create render target."));
+		return;
+	}
 
 	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
-	if (!ActiveCaptureActor.IsValid()) return;
+	if (!ActiveCaptureActor.IsValid())
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("%hs: SpawnAndConfigureCaptureActor() returned invalid actor. Aborting."), __FUNCTION__);
+		OnCaptureComplete.Broadcast(false, TEXT("Failed to spawn capture actor."));
+		return;
+	}
 
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Calling CaptureScene()..."), __FUNCTION__);
 	ActiveCaptureActor->GetCaptureComponent2D()->CaptureScene();
-	World->GetTimerManager().SetTimerForNextTick(this, &UMinimapGeneratorManager::ReadPixelsAndFinalize);
+
+	// Flush the rendering pipeline so the render target is fully populated before scheduling readback.
+	// This is critical on macOS Metal where async capture may not complete in time.
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Flushing rendering commands..."), __FUNCTION__);
+	FlushRenderingCommands();
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: FlushRenderingCommands() completed. Scheduling ReadPixelsAndFinalize for next tick."), __FUNCTION__);
+
+	GEditor->GetTimerManager()->SetTimerForNextTick(this, &UMinimapGeneratorManager::ReadPixelsAndFinalize);
 }
 
 // ===================================================================
@@ -277,7 +295,9 @@ UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 		RenderTarget->ClearColor = Settings.BackgroundColor;
 	}
 
-	RenderTarget->InitCustomFormat(TargetWidth, TargetHeight, PF_FloatRGBA, true);
+	// Use PF_B8G8R8A8 instead of PF_FloatRGBA. Float targets have limited readback support
+	// on macOS Metal, and the output is FColor (8-bit BGRA) anyway — no precision is lost.
+	RenderTarget->InitCustomFormat(TargetWidth, TargetHeight, PF_B8G8R8A8, true);
 
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Created Render Target (%dx%d)."), TargetWidth, TargetHeight);
 	return RenderTarget;
@@ -307,6 +327,14 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	}
 
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(CameraLocation, CameraRotation);
+	if (!CaptureActor)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("%hs: Failed to spawn ASceneCapture2D actor."), __FUNCTION__);
+		return nullptr;
+	}
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Spawned SceneCapture2D at (%s), OrthoWidth=%.2f"),
+		__FUNCTION__, *CameraLocation.ToString(), CameraOrthoWidth);
+
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
 	// FILTERING
 	TArray<AActor*> FinalShowList;
@@ -347,31 +375,37 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 		// CaptureComponent->CaptureSource = SCS_SceneColorHDRNoAlpha;
 	}
 
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: SceneCapture2D fully configured. CaptureSource=%d, ShowOnlyActors=%d"),
+		__FUNCTION__, static_cast<int32>(CaptureComponent->CaptureSource), CaptureComponent->ShowOnlyActors.Num());
 	return CaptureActor;
 }
 
 void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 {
-	UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Scheduling GPU readback for captured render target."));
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Scheduling GPU readback for captured render target."), __FUNCTION__);
 	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
 	if (!RenderTarget || !RenderTarget->GetResource())
 	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("%hs: RenderTarget is invalid (ptr=%p). Aborting readback."),
+			__FUNCTION__, RenderTarget);
 		OnSaveTaskCompleted(false, TEXT("Render Target became invalid before readback."));
-		if (const UWorld* World = GEditor->GetEditorWorldContext().World())
+		if (GEditor)
 		{
-			World->GetTimerManager().ClearTimer(ReadbackPollTimer);
+			GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
 		}
 		return;
 	}
 
+	FTextureRenderTargetResource* RenderTargetResource = static_cast<FTextureRenderTargetResource*>(RenderTarget->GetResource());
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: RenderTarget resource valid. SizeX=%d, SizeY=%d, Format=%d"),
+		__FUNCTION__, RenderTargetResource->GetSizeX(), RenderTargetResource->GetSizeY(),
+		static_cast<int32>(RenderTarget->GetFormat()));
+
 	StagingPixelBuffer.Reset();
 	StagingPixelBuffer.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
 
-	FTextureRenderTargetResource* RenderTargetResource = static_cast<FTextureRenderTargetResource*>(RenderTarget->
-		GetResource());
-
 	ENQUEUE_RENDER_COMMAND(ReadPixelsCommand)(
-		[RenderTargetResource, PixelBuffer = &this->StagingPixelBuffer, Fence = &this->ReadbackFence](
+		[RenderTargetResource, PixelBuffer = &this->StagingPixelBuffer](
 		FRHICommandListImmediate& RHICmdList)
 		{
 			FReadSurfaceDataFlags ReadPixelFlags(RCM_UNorm);
@@ -380,27 +414,52 @@ void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 				RenderTargetResource->GetRenderTargetTexture(),
 				FIntRect(0, 0, RenderTargetResource->GetSizeX(), RenderTargetResource->GetSizeY()),
 				*PixelBuffer, ReadPixelFlags);
-
-			// Fence->BeginFence();
 		}
 	);
 
 	ReadbackFence.BeginFence();
+	ReadbackPollCount = 0;
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Render command enqueued. Readback fence started. Starting poll timer (0.1s)."), __FUNCTION__);
 
-	const UWorld* World = GEditor->GetEditorWorldContext().World();
-	World->GetTimerManager().SetTimer(ReadbackPollTimer, this, &UMinimapGeneratorManager::CheckReadbackStatus, 0.1f,
-	                                  true);
+	GEditor->GetTimerManager()->SetTimer(ReadbackPollTimer, this, &UMinimapGeneratorManager::CheckReadbackStatus, 0.1f, true);
 
 	OnProgress.Broadcast(FText::FromString(TEXT("GPU is rendering... Editor remains responsive.")), 0.5f, 0, 0);
 }
 
 void UMinimapGeneratorManager::CheckReadbackStatus()
 {
+	ReadbackPollCount++;
+
+	// Timeout safety: abort after ~15 seconds (150 polls at 0.1s interval)
+	constexpr int32 MaxPollCount = 150;
+	if (ReadbackPollCount > MaxPollCount)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error,
+			TEXT("%hs: Readback fence did not complete after %d polls (~%.1fs). Aborting capture. This may indicate a GPU readback issue on this platform (e.g. macOS Metal)."),
+			__FUNCTION__, ReadbackPollCount, ReadbackPollCount * 0.1f);
+
+		if (GEditor) GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
+
+		if (ActiveCaptureActor.IsValid()) ActiveCaptureActor->Destroy();
+		ActiveCaptureActor.Reset();
+		ActiveRenderTarget.Reset();
+		StagingPixelBuffer.Reset();
+
+		OnSaveTaskCompleted(false, TEXT("GPU readback timed out."));
+		return;
+	}
+
+	if (ReadbackPollCount % 20 == 0)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Poll #%d — readback fence not yet complete."),
+			__FUNCTION__, ReadbackPollCount);
+	}
+
 	if (ReadbackFence.IsFenceComplete())
 	{
-		UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Readback fence completed."));
-		const UWorld* World = GEditor->GetEditorWorldContext().World();
-		World->GetTimerManager().ClearTimer(ReadbackPollTimer);
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Readback fence completed after %d polls."),
+			__FUNCTION__, ReadbackPollCount);
+		GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
 
 		if (ActiveCaptureActor.IsValid())
 		{
@@ -411,12 +470,14 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 
 		if (StagingPixelBuffer.Num() > 0)
 		{
-			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("GPU readback complete. Starting async save task."));
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: GPU readback complete. Pixel buffer has %d pixels. Starting async save task."),
+				__FUNCTION__, StagingPixelBuffer.Num());
 			StartImageSaveTask(MoveTemp(StagingPixelBuffer), Settings.OutputWidth, Settings.OutputHeight);
 			OnProgress.Broadcast(FText::FromString(TEXT("Saving image...")), 0.95f, 0, 0);
 		}
 		else
 		{
+			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("%hs: GPU readback resulted in empty pixel data."), __FUNCTION__);
 			OnSaveTaskCompleted(false, TEXT("GPU readback resulted in empty pixel data."));
 		}
 	}
@@ -633,10 +694,10 @@ void UMinimapGeneratorManager::CaptureNextTile()
 	// GEditor->GetEditorWorldContext().World()->GetTimerManager().SetTimerForNextTick(
 	// 	this, &UMinimapGeneratorManager::OnTileRenderedAndContinue);
 
-	if (const UWorld* World = GEditor->GetEditorWorldContext().World())
+	if (GEditor)
 	{
 		FTimerHandle TempHandle;
-		World->GetTimerManager().SetTimer(
+		GEditor->GetTimerManager()->SetTimer(
 			TempHandle, this, &UMinimapGeneratorManager::OnTileRenderedAndContinue, 0.2f, false);
 	}
 }

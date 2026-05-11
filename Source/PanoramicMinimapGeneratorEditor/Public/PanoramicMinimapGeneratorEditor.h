@@ -13,7 +13,6 @@ public:
 
 private:
     void AddMenuExtension(FMenuBuilder& Builder);
-    // HÀM MỚI để đăng ký menu
     void RegisterMenus();
     void PluginButtonClicked();
     TSharedRef<SDockTab> OnSpawnPluginTab(const FSpawnTabArgs& SpawnTabArgs);
