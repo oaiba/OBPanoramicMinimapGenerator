@@ -15,6 +15,9 @@
 #include "Editor.h"
 #include "Selection.h"
 #include "ImageUtils.h"
+#include "Async/Async.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
 #include "Slate/DeferredCleanupSlateBrush.h"
 #include "Widgets/Colors/SColorPicker.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -683,26 +686,72 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 
 	if (bSuccess && !FinalImagePath.IsEmpty() && IFileManager::Get().FileExists(*FinalImagePath))
 	{
-		if (UTexture2D* LoadedTexture = FImageUtils::ImportFileAsTexture2D(FinalImagePath))
+		// Load and decompress the PNG on a background thread to avoid freezing the editor.
+		// A 4096x4096 PNG can take 2-5 seconds to decompress — doing this on the game thread
+		// would make the editor unresponsive.
+		TWeakPtr<SMinimapGeneratorWindow> WeakThis = SharedThis(this);
+		Async(EAsyncExecution::ThreadPool, [ImagePath = FinalImagePath]()
 		{
-			// 1) Create an FDeferredCleanupSlateBrush and store it in a member for lifetime management.
-			//    CreateBrush returns TSharedRef, and we store it as TSharedPtr.
-			FinalImageBrushSource = FDeferredCleanupSlateBrush::CreateBrush(
-				LoadedTexture,
-				FVector2D(LoadedTexture->GetSizeX(), LoadedTexture->GetSizeY())
-			);
+			TArray<uint8> PngData;
+			if (!FFileHelper::LoadFileToArray(PngData, *ImagePath))
+			{
+				return TArray<uint8>();
+			}
 
-			// 2) Get the inner FSlateBrush* and assign it to SImage.
-			FinalImageView->SetImage(FinalImageBrushSource->GetSlateBrush());
-			ImageContainer->SetVisibility(EVisibility::Visible);
+			IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
+			TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+			if (!ImageWrapper.IsValid() || !ImageWrapper->SetCompressed(PngData.GetData(), PngData.Num()))
+			{
+				return TArray<uint8>();
+			}
 
-			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully loaded and displayed image from %s"), *FinalImagePath);
-		}
-		else
+			TArray<uint8> RawBGRA;
+			ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, RawBGRA);
+			return RawBGRA;
+		})
+		.Then([WeakThis, ImagePath = FinalImagePath](TFuture<TArray<uint8>> Future)
 		{
-			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load texture from file %s"), *FinalImagePath);
-			ImageContainer->SetVisibility(EVisibility::Collapsed);
-		}
+			// Dispatch texture creation back to game thread (UObject creation must happen there).
+			AsyncTask(ENamedThreads::GameThread, [WeakThis, ImagePath, RawData = Future.Get()]()
+			{
+				TSharedPtr<SMinimapGeneratorWindow> StrongThis = WeakThis.Pin();
+				if (!StrongThis.IsValid() || RawData.Num() == 0)
+				{
+					if (StrongThis.IsValid())
+					{
+						UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load or decompress preview image: %s"), *ImagePath);
+						StrongThis->ImageContainer->SetVisibility(EVisibility::Collapsed);
+					}
+					return;
+				}
+
+				// Infer dimensions from raw data (BGRA = 4 bytes per pixel, assuming square).
+				const int32 PixelCount = RawData.Num() / 4;
+				const int32 Dim = FMath::RoundToInt(FMath::Sqrt(static_cast<float>(PixelCount)));
+
+				UTexture2D* LoadedTexture = UTexture2D::CreateTransient(Dim, Dim, PF_B8G8R8A8);
+				if (!LoadedTexture)
+				{
+					UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to create transient texture for preview."));
+					StrongThis->ImageContainer->SetVisibility(EVisibility::Collapsed);
+					return;
+				}
+
+				void* MipData = LoadedTexture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+				FMemory::Memcpy(MipData, RawData.GetData(), RawData.Num());
+				LoadedTexture->GetPlatformData()->Mips[0].BulkData.Unlock();
+				LoadedTexture->UpdateResource();
+
+				StrongThis->FinalImageBrushSource = FDeferredCleanupSlateBrush::CreateBrush(
+					LoadedTexture,
+					FVector2D(LoadedTexture->GetSizeX(), LoadedTexture->GetSizeY())
+				);
+				StrongThis->FinalImageView->SetImage(StrongThis->FinalImageBrushSource->GetSlateBrush());
+				StrongThis->ImageContainer->SetVisibility(EVisibility::Visible);
+
+				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully loaded and displayed preview image from %s (async)."), *ImagePath);
+			});
+		});
 	}
 	else
 	{

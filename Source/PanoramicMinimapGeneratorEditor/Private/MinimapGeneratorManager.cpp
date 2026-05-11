@@ -174,6 +174,9 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 
 	if (bSuccess && Settings.bImportAsTextureAsset && !SavedImagePath.IsEmpty())
 	{
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Starting texture asset import (this runs on game thread)..."), __FUNCTION__);
+		const double ImportStartTime = FPlatformTime::Seconds();
+
 		// const FString AssetName = TEXT("T_") + FPaths::GetBaseFilename(SavedImagePath);
 		FString PackagePath = Settings.AssetPath;
 		if (!PackagePath.EndsWith(TEXT("/")))
@@ -215,7 +218,8 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 					TEXT("AssetRegistry"));
 				AssetRegistryModule.AssetCreated(NewTexture);
 
-				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully created texture asset: %s"), *FullAssetPath);
+				const double ImportDuration = FPlatformTime::Seconds() - ImportStartTime;
+				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully created texture asset: %s (took %.2fs)"), *FullAssetPath, ImportDuration);
 
 				TArray<UObject*> AssetsToSync;
 				AssetsToSync.Add(NewTexture);
@@ -442,9 +446,15 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 
 		if (ActiveCaptureActor.IsValid()) ActiveCaptureActor->Destroy();
 		ActiveCaptureActor.Reset();
-		ActiveRenderTarget.Reset();
-		StagingPixelBuffer.Reset();
 
+		// Force-destroy render target to free GPU memory immediately instead of waiting for GC.
+		if (ActiveRenderTarget.IsValid()) ActiveRenderTarget->ConditionalBeginDestroy();
+		ActiveRenderTarget.Reset();
+
+		// Release the staging buffer memory.
+		StagingPixelBuffer.Empty();
+
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Cleanup completed. All capture resources released."), __FUNCTION__);
 		OnSaveTaskCompleted(false, TEXT("GPU readback timed out."));
 		return;
 	}
@@ -466,6 +476,9 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 			ActiveCaptureActor->Destroy();
 		}
 		ActiveCaptureActor.Reset();
+
+		// Force-destroy render target to free GPU memory immediately instead of waiting for GC.
+		if (ActiveRenderTarget.IsValid()) ActiveRenderTarget->ConditionalBeginDestroy();
 		ActiveRenderTarget.Reset();
 
 		if (StagingPixelBuffer.Num() > 0)
@@ -473,6 +486,12 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: GPU readback complete. Pixel buffer has %d pixels. Starting async save task."),
 				__FUNCTION__, StagingPixelBuffer.Num());
 			StartImageSaveTask(MoveTemp(StagingPixelBuffer), Settings.OutputWidth, Settings.OutputHeight);
+
+			// MoveTemp transfers data ownership but does not release allocated capacity.
+			// Explicitly free the ~64MB staging buffer.
+			StagingPixelBuffer.Empty();
+
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Cleanup completed. All capture resources released."), __FUNCTION__);
 			OnProgress.Broadcast(FText::FromString(TEXT("Saving image...")), 0.95f, 0, 0);
 		}
 		else
