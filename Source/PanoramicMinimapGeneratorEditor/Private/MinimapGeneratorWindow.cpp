@@ -41,6 +41,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 	Manager = TStrongObjectPtr<UMinimapGeneratorManager>(NewObject<UMinimapGeneratorManager>());
 	Manager->OnProgress.AddSP(this, &SMinimapGeneratorWindow::OnCaptureProgress);
 	Manager->OnCaptureComplete.AddSP(this, &SMinimapGeneratorWindow::HandleCaptureCompleted);
+	OverlayLayers.AddDefaulted();
 
 	const FString DefaultPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir());
 	const FMargin LabelPadding(5, 5, 10, 5);
@@ -507,6 +508,117 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							]
 						]
 					]
+
+					// --- SECTION: OVERLAY AUTHORING ---
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+					[
+						SNew(SExpandableArea)
+						.InitiallyCollapsed(false)
+						.HeaderContent()
+						[
+							SNew(STextBlock).Text(LOCTEXT("OverlayHeader", "6. Overlay Editor")).Font(
+								FAppStyle::GetFontStyle("BoldFont"))
+						]
+						.BodyContent()
+						[
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
+							[
+								SNew(SGridPanel).FillColumn(1, 1.0f)
+								+ SGridPanel::Slot(0, 0).HAlign(HAlign_Right).Padding(LabelPadding)
+								[
+									SNew(STextBlock).Text(LOCTEXT("OverlayLabelLabel", "Label"))
+								]
+								+ SGridPanel::Slot(1, 0)
+								[
+									SAssignNew(OverlayLabelTextBox, SEditableTextBox)
+									.Text(LOCTEXT("OverlayDefaultLabel", "POI"))
+								]
+								+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+								[
+									SNew(STextBlock).Text(LOCTEXT("OverlayCategoryLabel", "Category"))
+								]
+								+ SGridPanel::Slot(1, 1)
+								[
+									SAssignNew(OverlayCategoryTextBox, SEditableTextBox)
+									.Text(LOCTEXT("OverlayDefaultCategory", "Default"))
+								]
+								+ SGridPanel::Slot(0, 2).HAlign(HAlign_Right).Padding(LabelPadding)
+								[
+									SNew(STextBlock).Text(LOCTEXT("OverlayLineWidthLabel", "Line Width"))
+								]
+								+ SGridPanel::Slot(1, 2)
+								[
+									SAssignNew(OverlayLineWidthSpinBox, SSpinBox<float>)
+									.MinValue(1.0f)
+									.MaxValue(32.0f)
+									.Value(3.0f)
+								]
+								+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+								[
+									SNew(STextBlock).Text(LOCTEXT("OverlayColorLabel", "Color"))
+								]
+								+ SGridPanel::Slot(1, 3).Padding(0, 4)
+								[
+									SNew(SColorBlock)
+									.Color(this, &SMinimapGeneratorWindow::GetSelectedOverlayColor)
+									.OnMouseButtonDown(this, &SMinimapGeneratorWindow::OnOverlayColorBlockMouseButtonDown)
+									.Size(FVector2D(100.f, 20.f))
+								]
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
+							[
+								SNew(SWrapBox).UseAllottedSize(true)
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SNew(SButton).Text(LOCTEXT("AddOverlayMarker", "Add Marker")).OnClicked(this, &SMinimapGeneratorWindow::OnAddMarkerFromSelectionClicked)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SNew(SButton).Text(LOCTEXT("AddOverlayZone", "Add Zone")).OnClicked(this, &SMinimapGeneratorWindow::OnAddZoneFromSelectionClicked)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SNew(SButton).Text(LOCTEXT("AddOverlayPath", "Add Path")).OnClicked(this, &SMinimapGeneratorWindow::OnAddPathFromSelectionClicked)
+								]
+								+ SWrapBox::Slot().Padding(2)
+								[
+									SNew(SButton).Text(LOCTEXT("AddOverlayFreehand", "Add Freehand")).OnClicked(this, &SMinimapGeneratorWindow::OnAddFreehandFromSelectionClicked)
+								]
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SBox)
+								.HeightOverride(150.0f)
+								[
+									SAssignNew(OverlayElementsListView, SListView<TSharedPtr<FString>>)
+									.ListItemsSource(&OverlayElementNames)
+									.SelectionMode(ESelectionMode::Multi)
+									.OnGenerateRow_Lambda(
+										[](const TSharedPtr<FString>& InItem,
+										   const TSharedRef<STableViewBase>& OwnerTable)
+										{
+											return SNew(STableRow<TSharedPtr<FString>>, OwnerTable)
+												[
+													SNew(STextBlock).Text(FText::FromString(InItem.IsValid() ? *InItem : FString()))
+												];
+										})
+								]
+							]
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("RemoveOverlay", "Remove Selected")).OnClicked(this, &SMinimapGeneratorWindow::OnRemoveSelectedOverlayClicked)
+								]
+								+ SHorizontalBox::Slot()
+								[
+									SNew(SButton).Text(LOCTEXT("ClearOverlay", "Clear Overlay")).OnClicked(this, &SMinimapGeneratorWindow::OnClearOverlayClicked)
+								]
+							]
+						]
+					]
 				]
 			]
 			// --- RIGHT PANE (PREVIEW AND OUTPUT) ---
@@ -748,11 +860,30 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							.Text(FText::FromString(TEXT("/Game/Minimaps/")))
 							.Visibility(this, &SMinimapGeneratorWindow::GetAssetPathVisibility)
 						]
-						+ SGridPanel::Slot(0, 8).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(1, 8)
+						[
+							SAssignNew(ExportDefinitionAssetCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
+							[
+								SNew(STextBlock).Text(LOCTEXT("ExportDefinitionAssetLabel", "Export Runtime Minimap DataAsset"))
+							]
+						]
+						+ SGridPanel::Slot(0, 9).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock)
+							.Text(LOCTEXT("DefinitionAssetPathLabel", "DataAsset Path"))
+							.Visibility(this, &SMinimapGeneratorWindow::GetDefinitionAssetPathVisibility)
+						]
+						+ SGridPanel::Slot(1, 9)
+						[
+							SAssignNew(DefinitionAssetPathTextBox, SEditableTextBox)
+							.Text(FText::FromString(TEXT("/Game/Minimaps/")))
+							.Visibility(this, &SMinimapGeneratorWindow::GetDefinitionAssetPathVisibility)
+						]
+						+ SGridPanel::Slot(0, 10).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("BackgroundModeLabel", "Background Mode"))
 						]
-						+ SGridPanel::Slot(1, 8)
+						+ SGridPanel::Slot(1, 10)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)
@@ -780,7 +911,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								]
 							]
 						]
-						+ SGridPanel::Slot(1, 9).Padding(0, 5, 0, 5)
+						+ SGridPanel::Slot(1, 11).Padding(0, 5, 0, 5)
 						[
 							SNew(SColorBlock)
 							.Color(this, &SMinimapGeneratorWindow::GetSelectedBackgroundColor)
@@ -1037,6 +1168,11 @@ EVisibility SMinimapGeneratorWindow::GetAssetPathVisibility() const
 	return ImportAsAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Hidden;
 }
 
+EVisibility SMinimapGeneratorWindow::GetDefinitionAssetPathVisibility() const
+{
+	return ExportDefinitionAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Hidden;
+}
+
 EVisibility SMinimapGeneratorWindow::GetTilingSettingsVisibility() const
 {
 	return UseTilingCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
@@ -1185,6 +1321,13 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	{
 		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
 	}
+	Settings.bExportDefinitionAsset = ExportDefinitionAssetCheckbox->IsChecked();
+	if (Settings.bExportDefinitionAsset)
+	{
+		Settings.DefinitionAssetPath = DefinitionAssetPathTextBox->GetText().ToString();
+		Settings.bImportAsTextureAsset = true;
+		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
+	}
 	Settings.bUseTiling = UseTilingCheckbox->IsChecked();
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
@@ -1215,6 +1358,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		Settings.ScreenSpaceReflectionQuality = SSRQualitySpinBox->GetValue();
 	}
 	Settings.ActorTagFilter = FName(*ActorTagFilterTextBox->GetText().ToString());
+	Settings.OverlayLayers = OverlayLayers;
 	UE_LOG(OBPanoramicMinimapGenerator, Log,
 		TEXT("Capture settings: Output=%dx%d, Tiling=%s, TileRes=%d, TileOverlap=%d, ImportAsset=%s, OutputPath=%s, FileName=%s"),
 		Settings.OutputWidth, Settings.OutputHeight,
@@ -1253,6 +1397,8 @@ void SMinimapGeneratorWindow::SaveSettings() const
 	GConfig->SetBool(*Section, TEXT("AutoFilename"), AutoFilenameCheckbox->IsChecked(), ConfigPath);
 	GConfig->SetBool(*Section, TEXT("ImportAsAsset"), ImportAsAssetCheckbox->IsChecked(), ConfigPath);
 	GConfig->SetString(*Section, TEXT("AssetPath"), *AssetPathTextBox->GetText().ToString(), ConfigPath);
+	GConfig->SetBool(*Section, TEXT("ExportDefinitionAsset"), ExportDefinitionAssetCheckbox->IsChecked(), ConfigPath);
+	GConfig->SetString(*Section, TEXT("DefinitionAssetPath"), *DefinitionAssetPathTextBox->GetText().ToString(), ConfigPath);
 
 	GConfig->SetInt(*Section, TEXT("BackgroundMode"), static_cast<int32>(CurrentBackgroundMode), ConfigPath);
 	GConfig->SetColor(*Section, TEXT("BackgroundColor"), SelectedBackgroundColor.ToFColor(true), ConfigPath);
@@ -1309,6 +1455,8 @@ void SMinimapGeneratorWindow::LoadSettings()
 	if (GConfig->GetBool(*Section, TEXT("AutoFilename"), bBoolVal, ConfigPath)) AutoFilenameCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
 	if (GConfig->GetBool(*Section, TEXT("ImportAsAsset"), bBoolVal, ConfigPath)) ImportAsAssetCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
 	if (GConfig->GetString(*Section, TEXT("AssetPath"), StringVal, ConfigPath)) AssetPathTextBox->SetText(FText::FromString(StringVal));
+	if (GConfig->GetBool(*Section, TEXT("ExportDefinitionAsset"), bBoolVal, ConfigPath)) ExportDefinitionAssetCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+	if (GConfig->GetString(*Section, TEXT("DefinitionAssetPath"), StringVal, ConfigPath)) DefinitionAssetPathTextBox->SetText(FText::FromString(StringVal));
 
 	if (GConfig->GetInt(*Section, TEXT("BackgroundMode"), IntVal, ConfigPath)) CurrentBackgroundMode = static_cast<EMinimapBackgroundMode>(IntVal);
 	if (GConfig->GetColor(*Section, TEXT("BackgroundColor"), ColorVal, ConfigPath)) SelectedBackgroundColor = FLinearColor(ColorVal);
@@ -1644,6 +1792,206 @@ FReply SMinimapGeneratorWindow::OnRotationPresetClicked(float Angle)
 		ImageRotationSpinBox->SetValue(Angle);
 		OnImageRotationChanged(Angle);
 	}
+	return FReply::Handled();
+}
+
+FLinearColor SMinimapGeneratorWindow::GetSelectedOverlayColor() const
+{
+	return SelectedOverlayColor;
+}
+
+void SMinimapGeneratorWindow::OnOverlayColorChanged(const FLinearColor NewColor)
+{
+	SelectedOverlayColor = NewColor;
+}
+
+FReply SMinimapGeneratorWindow::OnOverlayColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+{
+	if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	{
+		FColorPickerArgs PickerArgs;
+		PickerArgs.bUseAlpha = true;
+		PickerArgs.DisplayGamma = TAttribute<float>(2.2f);
+		PickerArgs.OnColorCommitted = FOnLinearColorValueChanged::CreateSP(this, &SMinimapGeneratorWindow::OnOverlayColorChanged);
+		PickerArgs.InitialColor = SelectedOverlayColor;
+		PickerArgs.ParentWidget = AsShared();
+		OpenColorPicker(PickerArgs);
+		return FReply::Handled();
+	}
+
+	return FReply::Unhandled();
+}
+
+FMinimapOverlayElement SMinimapGeneratorWindow::MakeOverlayElementFromSelection(const EMinimapOverlayElementType Type) const
+{
+	FMinimapOverlayElement Element;
+	Element.Type = Type;
+	Element.Id = FName(*FGuid::NewGuid().ToString(EGuidFormats::Short));
+	Element.Label = OverlayLabelTextBox.IsValid() ? OverlayLabelTextBox->GetText() : LOCTEXT("DefaultOverlayElementLabel", "Overlay");
+	Element.Category = OverlayCategoryTextBox.IsValid() ? FName(*OverlayCategoryTextBox->GetText().ToString()) : TEXT("Default");
+	Element.Style.Color = SelectedOverlayColor;
+	Element.Style.Opacity = SelectedOverlayColor.A;
+	Element.Style.LineWidth = OverlayLineWidthSpinBox.IsValid() ? OverlayLineWidthSpinBox->GetValue() : 3.0f;
+
+	TArray<AActor*> Actors;
+	if (GEditor && GEditor->GetSelectedActors())
+	{
+		GEditor->GetSelectedActors()->GetSelectedObjects<AActor>(Actors);
+	}
+
+	if (Type == EMinimapOverlayElementType::Zone)
+	{
+		FBox Bounds(ForceInit);
+		for (AActor* Actor : Actors)
+		{
+			if (Actor)
+			{
+				Bounds += Actor->GetComponentsBoundingBox(true, true);
+			}
+		}
+
+		if (Bounds.IsValid)
+		{
+			Element.WorldPoints = {
+				FVector(Bounds.Min.X, Bounds.Min.Y, Bounds.Min.Z),
+				FVector(Bounds.Max.X, Bounds.Min.Y, Bounds.Min.Z),
+				FVector(Bounds.Max.X, Bounds.Max.Y, Bounds.Min.Z),
+				FVector(Bounds.Min.X, Bounds.Max.Y, Bounds.Min.Z)
+			};
+		}
+	}
+	else
+	{
+		for (AActor* Actor : Actors)
+		{
+			if (Actor)
+			{
+				Element.WorldPoints.Add(Actor->GetActorLocation());
+			}
+		}
+	}
+
+	return Element;
+}
+
+void SMinimapGeneratorWindow::RefreshOverlayList()
+{
+	OverlayElementNames.Empty();
+	if (OverlayLayers.Num() == 0)
+	{
+		OverlayLayers.AddDefaulted();
+	}
+
+	for (const FMinimapOverlayElement& Element : OverlayLayers[0].Elements)
+	{
+		const FString TypeName = StaticEnum<EMinimapOverlayElementType>()->GetDisplayNameTextByValue(static_cast<int64>(Element.Type)).ToString();
+		OverlayElementNames.Add(MakeShared<FString>(FString::Printf(TEXT("%s | %s | %s | %d point(s)"),
+			*Element.Id.ToString(),
+			*TypeName,
+			*Element.Label.ToString(),
+			Element.WorldPoints.Num())));
+	}
+
+	if (OverlayElementsListView.IsValid())
+	{
+		OverlayElementsListView->RequestListRefresh();
+	}
+}
+
+FReply SMinimapGeneratorWindow::OnAddMarkerFromSelectionClicked()
+{
+	FMinimapOverlayElement Element = MakeOverlayElementFromSelection(EMinimapOverlayElementType::Marker);
+	if (Element.WorldPoints.Num() == 0)
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoSelectionForMarker", "Select at least one actor to create marker points."));
+		return FReply::Handled();
+	}
+
+	if (OverlayLayers.Num() == 0) OverlayLayers.AddDefaulted();
+	OverlayLayers[0].Elements.Add(MoveTemp(Element));
+	RefreshOverlayList();
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnAddZoneFromSelectionClicked()
+{
+	FMinimapOverlayElement Element = MakeOverlayElementFromSelection(EMinimapOverlayElementType::Zone);
+	if (Element.WorldPoints.Num() < 3)
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoSelectionForZone", "Select actor(s) with valid bounds to create a zone."));
+		return FReply::Handled();
+	}
+
+	if (OverlayLayers.Num() == 0) OverlayLayers.AddDefaulted();
+	OverlayLayers[0].Elements.Add(MoveTemp(Element));
+	RefreshOverlayList();
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnAddPathFromSelectionClicked()
+{
+	FMinimapOverlayElement Element = MakeOverlayElementFromSelection(EMinimapOverlayElementType::Path);
+	if (Element.WorldPoints.Num() < 2)
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoSelectionForPath", "Select at least two actors to create a path."));
+		return FReply::Handled();
+	}
+
+	if (OverlayLayers.Num() == 0) OverlayLayers.AddDefaulted();
+	OverlayLayers[0].Elements.Add(MoveTemp(Element));
+	RefreshOverlayList();
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnAddFreehandFromSelectionClicked()
+{
+	FMinimapOverlayElement Element = MakeOverlayElementFromSelection(EMinimapOverlayElementType::Freehand);
+	if (Element.WorldPoints.Num() < 2)
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("NoSelectionForFreehand", "Select at least two actors to create a freehand/polyline stroke."));
+		return FReply::Handled();
+	}
+
+	if (OverlayLayers.Num() == 0) OverlayLayers.AddDefaulted();
+	OverlayLayers[0].Elements.Add(MoveTemp(Element));
+	RefreshOverlayList();
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnRemoveSelectedOverlayClicked()
+{
+	if (!OverlayElementsListView.IsValid() || OverlayLayers.Num() == 0)
+	{
+		return FReply::Handled();
+	}
+
+	TSet<FString> SelectedIds;
+	for (const TSharedPtr<FString>& SelectedItem : OverlayElementsListView->GetSelectedItems())
+	{
+		if (SelectedItem.IsValid())
+		{
+			FString IdPart;
+			FString Remainder;
+			if (SelectedItem->Split(TEXT(" | "), &IdPart, &Remainder))
+			{
+				SelectedIds.Add(IdPart);
+			}
+		}
+	}
+
+	OverlayLayers[0].Elements.RemoveAll([&SelectedIds](const FMinimapOverlayElement& Element)
+	{
+		return SelectedIds.Contains(Element.Id.ToString());
+	});
+	RefreshOverlayList();
+	return FReply::Handled();
+}
+
+FReply SMinimapGeneratorWindow::OnClearOverlayClicked()
+{
+	OverlayLayers.Empty();
+	OverlayLayers.AddDefaulted();
+	RefreshOverlayList();
 	return FReply::Handled();
 }
 

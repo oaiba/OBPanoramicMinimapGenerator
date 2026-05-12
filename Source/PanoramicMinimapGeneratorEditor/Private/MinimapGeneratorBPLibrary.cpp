@@ -18,8 +18,14 @@ void UMinimapGeneratorBPLibrary::StartMinimapCapture(const FMinimapCaptureSettin
 
 	// Keep the manager alive during the process
 	Manager->AddToRoot();
+	Manager->OnCaptureComplete.AddLambda([Manager](bool, const FString&)
+	{
+		if (Manager && Manager->IsRooted())
+		{
+			Manager->RemoveFromRoot();
+		}
+	});
 	Manager->StartCaptureProcess(Settings);
-	// You would need a callback system here to know when it's done to RemoveFromRoot()
 #else
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("StartMinimapCapture called outside editor; ignored."));
 #endif

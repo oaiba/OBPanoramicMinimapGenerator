@@ -147,6 +147,19 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	bCancelRequested = false;
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
+
+	if (!Settings.CaptureBounds.IsValid || Settings.OutputWidth <= 0 || Settings.OutputHeight <= 0)
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Invalid capture bounds or output size."));
+		return;
+	}
+
+	if (Settings.bUseTiling && (Settings.TileResolution <= 0 || Settings.TileOverlap < 0 || Settings.TileOverlap >= Settings.TileResolution))
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Invalid tiling settings. Tile overlap must be lower than tile resolution."));
+		return;
+	}
+
 	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
 	if (Settings.bUseTiling)
 	{
@@ -169,101 +182,52 @@ void UMinimapGeneratorManager::CancelCapture()
 		GEditor->GetTimerManager()->ClearTimer(StreamingCheckTimer);
 	}
 
-	if (ScreenshotCapturedDelegateHandle.IsValid())
-	{
-		FScreenshotRequest::OnScreenshotCaptured().Remove(ScreenshotCapturedDelegateHandle);
-		ScreenshotCapturedDelegateHandle.Reset();
-	}
-
-	if (ActiveCaptureActor.IsValid()) ActiveCaptureActor->Destroy();
-	ActiveCaptureActor.Reset();
-
-	if (ActiveRenderTarget.IsValid()) ActiveRenderTarget->ConditionalBeginDestroy();
-	ActiveRenderTarget.Reset();
-
+	CleanupCaptureResources();
 	StagingPixelBuffer.Empty();
 	CapturedTileData.Empty();
 
 	OnCaptureComplete.Broadcast(false, TEXT("Capture cancelled by user."));
 }
 
-void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath) const
+void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath)
 {
 	if (bSuccess)
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
-		OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
 	}
 	else
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Async save task failed."));
 		OnProgress.Broadcast(FText::FromString(TEXT("Failed!")), 1.0f, 0, 0);
+		OnCaptureComplete.Broadcast(false, SavedImagePath);
+		return;
 	}
-	OnCaptureComplete.Broadcast(bSuccess, SavedImagePath);
 
-	if (bSuccess && Settings.bImportAsTextureAsset && !SavedImagePath.IsEmpty())
+	UTexture2D* ImportedTexture = nullptr;
+	if (!SavedImagePath.IsEmpty() && (Settings.bImportAsTextureAsset || Settings.bExportDefinitionAsset))
 	{
-		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Starting texture asset import (this runs on game thread)..."), __FUNCTION__);
-		const double ImportStartTime = FPlatformTime::Seconds();
+		ImportedTexture = ImportTextureAssetFromSavedImage(SavedImagePath);
+	}
 
-		// const FString AssetName = TEXT("T_") + FPaths::GetBaseFilename(SavedImagePath);
-		FString PackagePath = Settings.AssetPath;
-		if (!PackagePath.EndsWith(TEXT("/")))
+	if (Settings.bExportDefinitionAsset)
+	{
+		if (UMinimapDefinitionDataAsset* DefinitionAsset = CreateOrUpdateDefinitionAsset(SavedImagePath, ImportedTexture))
 		{
-			PackagePath += TEXT("/");
-		}
-		const FString FullAssetPath = PackagePath + FPaths::GetBaseFilename(SavedImagePath);
-
-		UPackage* Package = CreatePackage(*FullAssetPath);
-		Package->FullyLoad();
-
-		TArray<uint8> PngData;
-		if (!FFileHelper::LoadFileToArray(PngData, *SavedImagePath))
-		{
-			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load saved PNG file from disk: %s"), *SavedImagePath);
-			return;
-		}
-
-		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(
-			FName("ImageWrapper"));
-
-		if (const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
-			ImageWrapper.IsValid() && ImageWrapper->SetCompressed(PngData.GetData(), PngData.Num()))
-		{
-			if (TArray<uint8> UncompressedBGRA; ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
+			if (GEditor)
 			{
-				UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *FPaths::GetBaseFilename(SavedImagePath),
-				                                               RF_Public | RF_Standalone);
-				NewTexture->AddToRoot();
-
-				NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8,
-				                        UncompressedBGRA.GetData());
-				NewTexture->SRGB = true;
-				NewTexture->CompressionSettings = TC_Default;
-				NewTexture->UpdateResource();
-				// Package->MarkPackageDirty();
-
-				FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
-					TEXT("AssetRegistry"));
-				AssetRegistryModule.AssetCreated(NewTexture);
-
-				const double ImportDuration = FPlatformTime::Seconds() - ImportStartTime;
-				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully created texture asset: %s (took %.2fs)"), *FullAssetPath, ImportDuration);
-
 				TArray<UObject*> AssetsToSync;
-				AssetsToSync.Add(NewTexture);
+				AssetsToSync.Add(DefinitionAsset);
+				if (ImportedTexture)
+				{
+					AssetsToSync.Add(ImportedTexture);
+				}
 				GEditor->SyncBrowserToObjects(AssetsToSync);
-
-				NewTexture->RemoveFromRoot();
-
-				OnProgress.Broadcast(FText::FromString(TEXT("")), 0, 0, 0);
 			}
 		}
-		else
-		{
-			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to decode PNG data from file: %s"), *SavedImagePath);
-		}
 	}
+
+	OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
+	OnCaptureComplete.Broadcast(true, SavedImagePath);
 }
 
 // ===================================================================
@@ -311,6 +275,140 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation()
 // ===================================================================
 // SHARED HELPER FUNCTIONS
 // ===================================================================
+
+UTexture2D* UMinimapGeneratorManager::ImportTextureAssetFromSavedImage(const FString& SavedImagePath) const
+{
+	if (SavedImagePath.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Starting texture asset import..."), __FUNCTION__);
+	const double ImportStartTime = FPlatformTime::Seconds();
+
+	FString PackagePath = Settings.AssetPath;
+	if (!PackagePath.StartsWith(TEXT("/Game")))
+	{
+		PackagePath = TEXT("/Game/Minimaps/");
+	}
+	if (!PackagePath.EndsWith(TEXT("/")))
+	{
+		PackagePath += TEXT("/");
+	}
+
+	const FString AssetName = TEXT("T_") + FPaths::GetBaseFilename(SavedImagePath);
+	const FString FullAssetPath = PackagePath + AssetName;
+
+	UPackage* Package = CreatePackage(*FullAssetPath);
+	Package->FullyLoad();
+
+	TArray<uint8> PngData;
+	if (!FFileHelper::LoadFileToArray(PngData, *SavedImagePath))
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load saved PNG file from disk: %s"), *SavedImagePath);
+		return nullptr;
+	}
+
+	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
+	const TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+	if (!ImageWrapper.IsValid() || !ImageWrapper->SetCompressed(PngData.GetData(), PngData.Num()))
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to decode PNG data from file: %s"), *SavedImagePath);
+		return nullptr;
+	}
+
+	TArray<uint8> UncompressedBGRA;
+	if (!ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to read PNG raw data from file: %s"), *SavedImagePath);
+		return nullptr;
+	}
+
+	UTexture2D* NewTexture = FindObject<UTexture2D>(Package, *AssetName);
+	if (!NewTexture)
+	{
+		NewTexture = NewObject<UTexture2D>(Package, *AssetName, RF_Public | RF_Standalone);
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		AssetRegistryModule.AssetCreated(NewTexture);
+	}
+
+	NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8, UncompressedBGRA.GetData());
+	NewTexture->SRGB = true;
+	NewTexture->CompressionSettings = TC_Default;
+	NewTexture->UpdateResource();
+	NewTexture->MarkPackageDirty();
+	Package->MarkPackageDirty();
+
+	const double ImportDuration = FPlatformTime::Seconds() - ImportStartTime;
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Imported minimap texture asset: %s (%.2fs)"), *FullAssetPath, ImportDuration);
+
+	return NewTexture;
+}
+
+UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture) const
+{
+	FString PackagePath = Settings.DefinitionAssetPath;
+	if (!PackagePath.StartsWith(TEXT("/Game")))
+	{
+		PackagePath = Settings.AssetPath.StartsWith(TEXT("/Game")) ? Settings.AssetPath : TEXT("/Game/Minimaps/");
+	}
+	if (!PackagePath.EndsWith(TEXT("/")))
+	{
+		PackagePath += TEXT("/");
+	}
+
+	const FString AssetName = TEXT("DA_") + FPaths::GetBaseFilename(SavedImagePath);
+	const FString FullAssetPath = PackagePath + AssetName;
+	UPackage* Package = CreatePackage(*FullAssetPath);
+	Package->FullyLoad();
+
+	UMinimapDefinitionDataAsset* DefinitionAsset = FindObject<UMinimapDefinitionDataAsset>(Package, *AssetName);
+	if (!DefinitionAsset)
+	{
+		DefinitionAsset = NewObject<UMinimapDefinitionDataAsset>(Package, *AssetName, RF_Public | RF_Standalone);
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		AssetRegistryModule.AssetCreated(DefinitionAsset);
+	}
+
+	DefinitionAsset->BaseMapTexture = BaseMapTexture;
+	DefinitionAsset->WorldBounds = Settings.CaptureBounds;
+	DefinitionAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
+	DefinitionAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
+	DefinitionAsset->OverlayLayers = Settings.OverlayLayers;
+	DefinitionAsset->MarkPackageDirty();
+	Package->MarkPackageDirty();
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Created/updated minimap definition asset: %s"), *FullAssetPath);
+	return DefinitionAsset;
+}
+
+void UMinimapGeneratorManager::CleanupCaptureResources()
+{
+	if (GEditor)
+	{
+		GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
+		GEditor->GetTimerManager()->ClearTimer(StreamingCheckTimer);
+	}
+
+	if (ScreenshotCapturedDelegateHandle.IsValid())
+	{
+		FScreenshotRequest::OnScreenshotCaptured().Remove(ScreenshotCapturedDelegateHandle);
+		ScreenshotCapturedDelegateHandle.Reset();
+	}
+
+	if (ActiveCaptureActor.IsValid())
+	{
+		ActiveCaptureActor->Destroy();
+	}
+	ActiveCaptureActor.Reset();
+
+	if (ActiveRenderTarget.IsValid())
+	{
+		ActiveRenderTarget->ConditionalBeginDestroy();
+	}
+	ActiveRenderTarget.Reset();
+	StagingPixelBuffer.Empty();
+}
 
 UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 {
@@ -375,16 +473,18 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 
 	// CaptureComponent->ShowFlags = FEngineShowFlags(ESFIM_Editor);
 	CaptureComponent->ShowFlags.SetDynamicShadows(Settings.bCaptureDynamicShadows);
-	CaptureComponent->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
-	CaptureComponent->ShowOnlyActors = FinalShowList;
+	const bool bHasFiltering = Settings.ShowOnlyActors.Num() > 0 || Settings.HiddenActors.Num() > 0 || Settings.ActorClassFilter || !Settings.ActorTagFilter.IsNone();
+	CaptureComponent->PrimitiveRenderMode = bHasFiltering ? ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList : Settings.PrimitiveRenderMode;
+	CaptureComponent->ShowOnlyActors = (CaptureComponent->PrimitiveRenderMode == ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList) ? FinalShowList : TArray<AActor*>();
 	CaptureComponent->HiddenActors.Empty();
 	// ===================================
 
 	CaptureComponent->bCaptureEveryFrame = false;
 	CaptureComponent->bCaptureOnMovement = false;
 	CaptureComponent->TextureTarget = RenderTarget;
-	CaptureComponent->ProjectionType = ECameraProjectionMode::Orthographic;
+	CaptureComponent->ProjectionType = Settings.bIsOrthographic ? ECameraProjectionMode::Orthographic : ECameraProjectionMode::Perspective;
 	CaptureComponent->OrthoWidth = CameraOrthoWidth;
+	CaptureComponent->FOVAngle = Settings.CameraFOV;
 	CaptureComponent->CompositeMode = SCCM_Overwrite;
 
 	if (Settings.bOverrideWithHighQualitySettings)
@@ -473,17 +573,7 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 			TEXT("%hs: Readback fence did not complete after %d polls (~%.1fs). Aborting capture. This may indicate a GPU readback issue on this platform (e.g. macOS Metal)."),
 			__FUNCTION__, ReadbackPollCount, ReadbackPollCount * 0.1f);
 
-		if (GEditor) GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
-
-		if (ActiveCaptureActor.IsValid()) ActiveCaptureActor->Destroy();
-		ActiveCaptureActor.Reset();
-
-		// Force-destroy render target to free GPU memory immediately instead of waiting for GC.
-		if (ActiveRenderTarget.IsValid()) ActiveRenderTarget->ConditionalBeginDestroy();
-		ActiveRenderTarget.Reset();
-
-		// Release the staging buffer memory.
-		StagingPixelBuffer.Empty();
+		CleanupCaptureResources();
 
 		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Cleanup completed. All capture resources released."), __FUNCTION__);
 		OnSaveTaskCompleted(false, TEXT("GPU readback timed out."));
@@ -508,8 +598,10 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 		}
 		ActiveCaptureActor.Reset();
 
-		// Force-destroy render target to free GPU memory immediately instead of waiting for GC.
-		if (ActiveRenderTarget.IsValid()) ActiveRenderTarget->ConditionalBeginDestroy();
+		if (ActiveRenderTarget.IsValid())
+		{
+			ActiveRenderTarget->ConditionalBeginDestroy();
+		}
 		ActiveRenderTarget.Reset();
 
 		if (StagingPixelBuffer.Num() > 0)
@@ -768,6 +860,7 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 	TArray<FColor> TilePixels;
 	if (auto* RTResource = static_cast<FTextureRenderTargetResource*>(RenderTarget->GetResource()))
 	{
+		FlushRenderingCommands();
 		RTResource->ReadPixels(TilePixels);
 	}
 
@@ -811,6 +904,10 @@ void UMinimapGeneratorManager::StartStitching()
 		ActiveCaptureActor->Destroy();
 	}
 	ActiveCaptureActor.Reset();
+	if (ActiveRenderTarget.IsValid())
+	{
+		ActiveRenderTarget->ConditionalBeginDestroy();
+	}
 	ActiveRenderTarget.Reset();
 
 	if (CapturedTileData.Num() == 0)

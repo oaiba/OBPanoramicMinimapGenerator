@@ -84,7 +84,10 @@ private:
 	
 	TSharedPtr<SCheckBox> ImportAsAssetCheckbox;
 	TSharedPtr<SEditableTextBox> AssetPathTextBox;
+	TSharedPtr<SCheckBox> ExportDefinitionAssetCheckbox;
+	TSharedPtr<SEditableTextBox> DefinitionAssetPathTextBox;
 	EVisibility GetAssetPathVisibility() const;
+	EVisibility GetDefinitionAssetPathVisibility() const;
 	
 	TSharedPtr<SEditableTextBox> OutputPath;
 	TSharedPtr<SEditableTextBox> FileName;
@@ -151,6 +154,26 @@ private:
 	const UClass* GetSelectedActorClass() const;
 	/** Called when the user selects a new actor class. */
 	void OnActorClassChanged(const UClass* NewClass);
+
+	// Overlay authoring
+	TArray<FMinimapOverlayLayer> OverlayLayers;
+	TArray<TSharedPtr<FString>> OverlayElementNames;
+	TSharedPtr<SListView<TSharedPtr<FString>>> OverlayElementsListView;
+	TSharedPtr<SEditableTextBox> OverlayLabelTextBox;
+	TSharedPtr<SEditableTextBox> OverlayCategoryTextBox;
+	TSharedPtr<SSpinBox<float>> OverlayLineWidthSpinBox;
+	FLinearColor SelectedOverlayColor = FLinearColor::Yellow;
+	FReply OnOverlayColorBlockMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent);
+	void OnOverlayColorChanged(FLinearColor NewColor);
+	FLinearColor GetSelectedOverlayColor() const;
+	FReply OnAddMarkerFromSelectionClicked();
+	FReply OnAddZoneFromSelectionClicked();
+	FReply OnAddPathFromSelectionClicked();
+	FReply OnAddFreehandFromSelectionClicked();
+	FReply OnRemoveSelectedOverlayClicked();
+	FReply OnClearOverlayClicked();
+	void RefreshOverlayList();
+	FMinimapOverlayElement MakeOverlayElementFromSelection(EMinimapOverlayElementType Type) const;
 	
 	// Progress Reporting
 	TSharedPtr<SProgressBar> ProgressBar;

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/SceneCaptureComponent.h"
 #include "Engine/SceneCapture2D.h"
+#include "MinimapDefinitionDataAsset.h"
 #include "UObject/Object.h"
 #include "MinimapGeneratorManager.generated.h"
 
@@ -94,6 +95,12 @@ struct FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output|Import", meta = (EditCondition = "bImportAsTextureAsset"))
 	FString AssetPath = TEXT("/Game/Minimaps/");
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output|Runtime")
+	bool bExportDefinitionAsset = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output|Runtime", meta = (EditCondition = "bExportDefinitionAsset"))
+	FString DefinitionAssetPath = TEXT("/Game/Minimaps/");
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
 	EMinimapBackgroundMode BackgroundMode = EMinimapBackgroundMode::SolidColor;
 
@@ -115,6 +122,9 @@ struct FMinimapCaptureSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Filtering")
 	FName ActorTagFilter;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overlay")
+	TArray<FMinimapOverlayLayer> OverlayLayers;
 };
 
 class FMinimapStreamingSourceProvider;
@@ -145,12 +155,15 @@ public:
 	void CancelCapture();
 	
 	// Callback function when the async save task is complete
-	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath) const;
+	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath);
 private:
 	// Main steps of the process
 	void OnAllTasksCompleted();
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
+	UTexture2D* ImportTextureAssetFromSavedImage(const FString& SavedImagePath) const;
+	UMinimapDefinitionDataAsset* CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture) const;
+	void CleanupCaptureResources();
 
 	// === FUNCTIONS FOR SINGLE CAPTURE ===
 	/** Create and configure the Render Target to draw to. */
