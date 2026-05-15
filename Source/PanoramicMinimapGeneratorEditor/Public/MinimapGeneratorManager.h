@@ -153,9 +153,12 @@ public:
 	
 	// Cancel an ongoing capture process
 	void CancelCapture();
+	void ShutdownCapture(bool bBroadcastResult);
 	
 	// Callback function when the async save task is complete
 	void OnSaveTaskCompleted(bool bSuccess, const FString& SavedImagePath);
+
+	virtual void BeginDestroy() override;
 private:
 	// Main steps of the process
 	void OnAllTasksCompleted();
@@ -222,6 +225,7 @@ private:
 
 	bool bIsSingleCaptureMode = false;
 	bool bCancelRequested = false;
+	bool bIsShuttingDown = false;
 
 	TWeakObjectPtr<ASceneCapture2D> ActiveCaptureActor;
 	TWeakObjectPtr<UTextureRenderTarget2D> ActiveRenderTarget;

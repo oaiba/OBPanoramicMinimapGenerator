@@ -28,6 +28,7 @@
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Misc/MessageDialog.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/ConfigCacheIni.h"
@@ -961,8 +962,54 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 	LoadSettings();
 }
 
+SMinimapGeneratorWindow::~SMinimapGeneratorWindow()
+{
+	if (GEditor)
+	{
+		GEditor->GetTimerManager()->ClearTimer(TimerHandle_HideProgress);
+	}
+
+	UnbindManagerDelegates();
+	if (Manager.IsValid())
+	{
+		Manager->ShutdownCapture(false);
+		Manager.Reset();
+	}
+
+	ReleasePreviewResources();
+}
+
+void SMinimapGeneratorWindow::UnbindManagerDelegates()
+{
+	if (Manager.IsValid())
+	{
+		Manager->OnProgress.RemoveAll(this);
+		Manager->OnCaptureComplete.RemoveAll(this);
+	}
+}
+
+void SMinimapGeneratorWindow::ReleasePreviewResources()
+{
+	if (FinalImageView.IsValid())
+	{
+		FinalImageView->SetImage(nullptr);
+	}
+	if (ZoomedImageView.IsValid())
+	{
+		ZoomedImageView->SetImage(nullptr);
+	}
+
+	FinalImageBrushSource.Reset();
+	LastSavedImagePath.Reset();
+}
+
 void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FString& FinalImagePath)
 {
+	if (IsEngineExitRequested() || !FSlateApplication::IsInitialized())
+	{
+		return;
+	}
+
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Capture completed. Success=%s, Path=%s"),
 		bSuccess ? TEXT("true") : TEXT("false"), *FinalImagePath);
 	StartButton->SetEnabled(true);
@@ -970,12 +1017,27 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 
 	// Use a short timer to hide progress UI after completion.
 	// This lets users briefly see the final status ("Done!" or "Failed!").
+	TWeakPtr<SMinimapGeneratorWindow> WeakThis = SharedThis(this);
 	GEditor->GetTimerManager()->SetTimer(
 		TimerHandle_HideProgress,
-		[this]()
+		[WeakThis]()
 		{
-			ProgressBar->SetVisibility(EVisibility::Hidden);
-			StatusText->SetVisibility(EVisibility::Hidden);
+			if (IsEngineExitRequested() || !FSlateApplication::IsInitialized())
+			{
+				return;
+			}
+
+			if (const TSharedPtr<SMinimapGeneratorWindow> StrongThis = WeakThis.Pin())
+			{
+				if (StrongThis->ProgressBar.IsValid())
+				{
+					StrongThis->ProgressBar->SetVisibility(EVisibility::Hidden);
+				}
+				if (StrongThis->StatusText.IsValid())
+				{
+					StrongThis->StatusText->SetVisibility(EVisibility::Hidden);
+				}
+			}
 		},
 		2.0f, // Hide after 2 seconds
 		false
@@ -995,9 +1057,13 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 		// Load and decompress the PNG on a background thread to avoid freezing the editor.
 		// A 4096x4096 PNG can take 2-5 seconds to decompress — doing this on the game thread
 		// would make the editor unresponsive.
-		TWeakPtr<SMinimapGeneratorWindow> WeakThis = SharedThis(this);
 		Async(EAsyncExecution::ThreadPool, [ImagePath = FinalImagePath]()
 		{
+			if (IsEngineExitRequested())
+			{
+				return TArray<uint8>();
+			}
+
 			TArray<uint8> PngData;
 			if (!FFileHelper::LoadFileToArray(PngData, *ImagePath))
 			{
@@ -1020,6 +1086,11 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 			// Dispatch texture creation back to game thread (UObject creation must happen there).
 			AsyncTask(ENamedThreads::GameThread, [WeakThis, ImagePath, RawData = Future.Get()]()
 			{
+				if (IsEngineExitRequested() || !FSlateApplication::IsInitialized())
+				{
+					return;
+				}
+
 				TSharedPtr<SMinimapGeneratorWindow> StrongThis = WeakThis.Pin();
 				if (!StrongThis.IsValid() || RawData.Num() == 0)
 				{
@@ -1075,6 +1146,11 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 
 void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles)
 {
+	if (IsEngineExitRequested() || !FSlateApplication::IsInitialized())
+	{
+		return;
+	}
+
 	if (ProgressBar.IsValid() && StatusText.IsValid())
 	{
 		ProgressBar->SetPercent(Percentage);

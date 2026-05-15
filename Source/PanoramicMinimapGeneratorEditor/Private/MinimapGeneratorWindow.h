@@ -26,6 +26,7 @@ public:
 
 	/** Required: builds the widget when it is created. */
 	void Construct(const FArguments& InArgs);
+	virtual ~SMinimapGeneratorWindow() override;
 
 private:
 	// --- EVENT HANDLERS (DELEGATES) ---
@@ -40,6 +41,8 @@ private:
 	bool IsPerspectiveMode() const;
 	/** Called by manager delegates to update UI state. */
 	void OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles);
+	void UnbindManagerDelegates();
+	void ReleasePreviewResources();
 
 	// === BACKGROUND MODE STATE ===
 	/** Current background mode selected in UI. */

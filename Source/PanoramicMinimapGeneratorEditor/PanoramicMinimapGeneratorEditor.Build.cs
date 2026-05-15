@@ -25,6 +25,7 @@ public class PanoramicMinimapGeneratorEditor : ModuleRules
                 "UnrealEd",      // Required for Editor functionality
                 "LevelEditor",   // Required to add items to the main menu
                 "ToolMenus",
+                "AssetTools",
                 "ImageWrapper",
                 "PanoramicMinimapGeneratorRuntime",
                 "RHI",

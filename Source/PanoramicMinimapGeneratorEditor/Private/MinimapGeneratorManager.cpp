@@ -37,6 +37,11 @@ public:
 			const bool bSuccess = FFileHelper::SaveArrayToFile(ImageWrapper->GetCompressed(), *FullPath);
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr, bSuccess, Path = this->FullPath]
 			{
+				if (IsEngineExitRequested())
+				{
+					return;
+				}
+
 				if (UMinimapGeneratorManager* Manager = ManagerPtr.Get())
 				{
 					Manager->OnSaveTaskCompleted(bSuccess, Path);
@@ -47,6 +52,11 @@ public:
 		{
 			AsyncTask(ENamedThreads::GameThread, [ManagerPtr = this->ManagerPtr]
 			{
+				if (IsEngineExitRequested())
+				{
+					return;
+				}
+
 				if (UMinimapGeneratorManager* Manager = ManagerPtr.Get())
 				{
 					Manager->OnSaveTaskCompleted(false, TEXT("ImageWrapper failed."));
@@ -93,6 +103,11 @@ public:
 			// Log the result back on the game thread for visibility
 			AsyncTask(ENamedThreads::GameThread, [bSuccess, Path = this->FullPath]
 			{
+				if (IsEngineExitRequested())
+				{
+					return;
+				}
+
 				if (bSuccess)
 				{
 					UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Debug tile saved successfully: %s"), *Path);
@@ -108,6 +123,11 @@ public:
 			// Log failure
 			AsyncTask(ENamedThreads::GameThread, [Path = this->FullPath]
 			{
+				if (IsEngineExitRequested())
+				{
+					return;
+				}
+
 				UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("ImageWrapper failed for debug tile: %s"), *Path);
 			});
 		}
@@ -144,6 +164,7 @@ void SaveDebugTileImage(const FString& BasePath, const FString& BaseFileName, co
 
 void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings& InSettings)
 {
+	bIsShuttingDown = false;
 	bCancelRequested = false;
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
@@ -174,23 +195,41 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 void UMinimapGeneratorManager::CancelCapture()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Capture process cancelled by user."), *GetName(), *FString(__FUNCTION__));
-	bCancelRequested = true;
+	ShutdownCapture(true);
+}
 
-	if (GEditor)
-	{
-		GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
-		GEditor->GetTimerManager()->ClearTimer(StreamingCheckTimer);
-	}
+void UMinimapGeneratorManager::ShutdownCapture(const bool bBroadcastResult)
+{
+	bCancelRequested = true;
+	bIsShuttingDown = !bBroadcastResult;
 
 	CleanupCaptureResources();
-	StagingPixelBuffer.Empty();
 	CapturedTileData.Empty();
 
-	OnCaptureComplete.Broadcast(false, TEXT("Capture cancelled by user."));
+	if (bBroadcastResult && !IsEngineExitRequested())
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Capture cancelled by user."));
+	}
+	else
+	{
+		OnProgress.Clear();
+		OnCaptureComplete.Clear();
+	}
+}
+
+void UMinimapGeneratorManager::BeginDestroy()
+{
+	ShutdownCapture(false);
+	Super::BeginDestroy();
 }
 
 void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FString& SavedImagePath)
 {
+	if (bIsShuttingDown || IsEngineExitRequested())
+	{
+		return;
+	}
+
 	if (bSuccess)
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
@@ -213,7 +252,7 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 	{
 		if (UMinimapDefinitionDataAsset* DefinitionAsset = CreateOrUpdateDefinitionAsset(SavedImagePath, ImportedTexture))
 		{
-			if (GEditor)
+			if (GEditor && !IsEngineExitRequested())
 			{
 				TArray<UObject*> AssetsToSync;
 				AssetsToSync.Add(DefinitionAsset);
