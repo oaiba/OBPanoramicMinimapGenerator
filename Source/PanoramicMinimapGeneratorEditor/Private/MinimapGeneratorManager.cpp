@@ -542,7 +542,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	}
 	else
 	{
-		// Keep legacy behavior when quality override is disabled.
+		// Use the default lightweight capture source when quality override is disabled.
 		CaptureComponent->CaptureSource = SCS_FinalColorLDR;
 		// CaptureComponent->CaptureSource = SCS_SceneColorHDRNoAlpha;
 	}
