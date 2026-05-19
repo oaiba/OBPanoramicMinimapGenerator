@@ -220,6 +220,10 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 		}
 	}
 
+	const FString CaptureMode = Settings.bUseTiling
+		? (Settings.bExportTileSet ? TEXT("Tile Set + LOD") : TEXT("Legacy Tiled Stitch"))
+		: TEXT("Single Capture");
+	ResetTelemetry(CaptureMode, TEXT("Starting"));
 	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
 	if (Settings.bUseTiling && Settings.bExportTileSet)
 	{
@@ -250,6 +254,12 @@ void UMinimapGeneratorManager::ShutdownCapture(const bool bBroadcastResult)
 	CapturedTileData.Empty();
 	TileSetExportLevels.Empty();
 	TileSetTilesSinceGarbageCollect = 0;
+	if (bBroadcastResult)
+	{
+		Telemetry.CurrentPhase = TEXT("Cancelled");
+		Telemetry.bIsCapturing = false;
+		BroadcastTelemetry();
+	}
 
 	if (bBroadcastResult && !IsEngineExitRequested())
 	{
@@ -282,17 +292,30 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 	else
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Async save task failed."));
+		Telemetry.CurrentPhase = TEXT("Failed");
+		Telemetry.bIsCapturing = false;
+		BroadcastTelemetry();
 		OnProgress.Broadcast(FText::FromString(TEXT("Failed!")), 1.0f, 0, 0);
 		OnCaptureComplete.Broadcast(false, SavedImagePath);
 		return;
 	}
 
+	if (TelemetryImageSaveStartTime > 0.0)
+	{
+		Telemetry.LastPackageSaveSeconds = FPlatformTime::Seconds() - TelemetryImageSaveStartTime;
+		TelemetryImageSaveStartTime = 0.0;
+	}
+	UpdateTelemetryPhase(TEXT("Importing Assets"));
 	UTexture2D* ImportedTexture = nullptr;
 	if (!SavedImagePath.IsEmpty() && (Settings.bImportAsTextureAsset || Settings.bExportDefinitionAsset))
 	{
+		const double ImportStartTime = FPlatformTime::Seconds();
 		ImportedTexture = ImportTextureAssetFromSavedImage(SavedImagePath);
+		Telemetry.LastImportSeconds = FPlatformTime::Seconds() - ImportStartTime;
+		BroadcastTelemetry();
 	}
 
+	UpdateTelemetryPhase(TEXT("Finalizing"));
 	if (Settings.bExportDefinitionAsset)
 	{
 		if (UMinimapDefinitionDataAsset* DefinitionAsset = CreateOrUpdateDefinitionAsset(SavedImagePath, ImportedTexture))
@@ -310,6 +333,9 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 		}
 	}
 
+	Telemetry.CurrentPhase = TEXT("Done");
+	Telemetry.bIsCapturing = false;
+	BroadcastTelemetry();
 	OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
 	OnCaptureComplete.Broadcast(true, SavedImagePath);
 }
@@ -321,6 +347,7 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 void UMinimapGeneratorManager::StartSingleCaptureForValidation()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting single capture validation flow."));
+	UpdateTelemetryPhase(TEXT("Capturing Single"));
 	const UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World)
 	{
@@ -360,7 +387,7 @@ void UMinimapGeneratorManager::StartSingleCaptureForValidation()
 // SHARED HELPER FUNCTIONS
 // ===================================================================
 
-UTexture2D* UMinimapGeneratorManager::ImportTextureAssetFromSavedImage(const FString& SavedImagePath) const
+UTexture2D* UMinimapGeneratorManager::ImportTextureAssetFromSavedImage(const FString& SavedImagePath)
 {
 	if (SavedImagePath.IsEmpty())
 	{
@@ -438,7 +465,7 @@ TSoftObjectPtr<UTexture2D> UMinimapGeneratorManager::ImportTileTextureAssetFromP
                                                                                       const int32 Width,
                                                                                       const int32 Height,
                                                                                       const FString& PackagePath,
-                                                                                      const FString& AssetName) const
+                                                                                      const FString& AssetName)
 {
 	if (PixelData.Num() != Width * Height || Width <= 0 || Height <= 0)
 	{
@@ -478,7 +505,7 @@ TSoftObjectPtr<UTexture2D> UMinimapGeneratorManager::ImportTileTextureAssetFromP
 
 UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionAsset(const FString& SavedImagePath,
                                                                                      UTexture2D* BaseMapTexture,
-                                                                                     UMinimapTileSetDataAsset* TileSet) const
+                                                                                     UMinimapTileSetDataAsset* TileSet)
 {
 	FString PackagePath = Settings.DefinitionAssetPath;
 	if (!PackagePath.StartsWith(TEXT("/Game")))
@@ -518,7 +545,7 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 	return DefinitionAsset;
 }
 
-UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset() const
+UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset()
 {
 	const FString PackagePath = NormalizePackagePath(Settings.DefinitionAssetPath);
 	const FString AssetName = MakeSafeAssetName(TEXT("DA_") + Settings.FileName + TEXT("_TileSet"));
@@ -550,7 +577,7 @@ UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset()
 	return TileSetAsset;
 }
 
-bool UMinimapGeneratorManager::SaveAssetPackage(UPackage* Package, UObject* Asset) const
+bool UMinimapGeneratorManager::SaveAssetPackage(UPackage* Package, UObject* Asset)
 {
 	if (!Package || !Asset)
 	{
@@ -565,7 +592,10 @@ bool UMinimapGeneratorManager::SaveAssetPackage(UPackage* Package, UObject* Asse
 	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 	SaveArgs.SaveFlags = SAVE_NoError;
 
+	const double SaveStartTime = FPlatformTime::Seconds();
 	const bool bSaved = UPackage::SavePackage(Package, Asset, *PackageFilename, SaveArgs);
+	Telemetry.LastPackageSaveSeconds = FPlatformTime::Seconds() - SaveStartTime;
+	BroadcastTelemetry();
 	if (bSaved)
 	{
 		Package->SetDirtyFlag(false);
@@ -576,6 +606,100 @@ bool UMinimapGeneratorManager::SaveAssetPackage(UPackage* Package, UObject* Asse
 	}
 
 	return bSaved;
+}
+
+void UMinimapGeneratorManager::ResetTelemetry(const FString& CaptureMode, const FString& Phase)
+{
+	Telemetry = FMinimapCaptureTelemetry();
+	Telemetry.CaptureMode = CaptureMode;
+	Telemetry.CurrentPhase = Phase;
+	Telemetry.OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
+	Telemetry.TileResolution = Settings.TileResolution;
+	Telemetry.bUseTiling = Settings.bUseTiling;
+	Telemetry.bExportTileSet = Settings.bExportTileSet;
+	Telemetry.bCaptureDynamicShadows = Settings.bCaptureDynamicShadows;
+	Telemetry.bOverrideWithHighQualitySettings = Settings.bOverrideWithHighQualitySettings;
+	Telemetry.CaptureSourceName = GetCaptureSourceTelemetryName();
+	Telemetry.bIsCapturing = true;
+	TelemetryCaptureStartTime = FPlatformTime::Seconds();
+	TelemetryCurrentTileStartTime = 0.0;
+	TelemetryImageSaveStartTime = 0.0;
+	TelemetryReadbackStartTime = 0.0;
+	TelemetryCompletedTiles = 0;
+	TelemetryTimedTileCount = 0;
+	TelemetryTileSecondsTotal = 0.0;
+	BroadcastTelemetry();
+}
+
+void UMinimapGeneratorManager::UpdateTelemetryPhase(const FString& Phase)
+{
+	Telemetry.CurrentPhase = Phase;
+	BroadcastTelemetry();
+}
+
+void UMinimapGeneratorManager::BeginTelemetryTile(const int32 CurrentTile, const int32 TotalTiles, const int32 LOD)
+{
+	Telemetry.CurrentTile = CurrentTile;
+	Telemetry.TotalTiles = TotalTiles;
+	Telemetry.CurrentLOD = LOD;
+	Telemetry.CurrentPhase = TEXT("Capturing Tile");
+	TelemetryCurrentTileStartTime = FPlatformTime::Seconds();
+	BroadcastTelemetry();
+}
+
+void UMinimapGeneratorManager::CompleteTelemetryTile()
+{
+	if (TelemetryCurrentTileStartTime > 0.0)
+	{
+		Telemetry.LastTileSeconds = FPlatformTime::Seconds() - TelemetryCurrentTileStartTime;
+		TelemetryTileSecondsTotal += Telemetry.LastTileSeconds;
+		TelemetryTimedTileCount++;
+		Telemetry.AverageTileSeconds = TelemetryTileSecondsTotal / FMath::Max(1, TelemetryTimedTileCount);
+		TelemetryCompletedTiles = FMath::Max(TelemetryCompletedTiles, Telemetry.CurrentTile);
+		TelemetryCurrentTileStartTime = 0.0;
+	}
+	BroadcastTelemetry();
+}
+
+void UMinimapGeneratorManager::BroadcastTelemetry()
+{
+	Telemetry.ElapsedSeconds = TelemetryCaptureStartTime > 0.0
+		                           ? FPlatformTime::Seconds() - TelemetryCaptureStartTime
+		                           : 0.0;
+	if (Telemetry.TotalTiles > 0 && Telemetry.AverageTileSeconds > 0.0 && TelemetryCompletedTiles < Telemetry.TotalTiles)
+	{
+		Telemetry.EstimatedRemainingSeconds = (Telemetry.TotalTiles - TelemetryCompletedTiles) * Telemetry.AverageTileSeconds;
+	}
+	else
+	{
+		Telemetry.EstimatedRemainingSeconds = -1.0;
+	}
+	OnTelemetryUpdated.Broadcast(Telemetry);
+}
+
+int32 UMinimapGeneratorManager::GetTileSetTotalTileCount() const
+{
+	int32 TotalTiles = 0;
+	for (const FMinimapTilePyramidLevel& Level : TileSetExportLevels)
+	{
+		TotalTiles += Level.GridDimensions.X * Level.GridDimensions.Y;
+	}
+	return TotalTiles;
+}
+
+FString UMinimapGeneratorManager::GetCaptureSourceTelemetryName() const
+{
+	if (!Settings.bOverrideWithHighQualitySettings)
+	{
+		return TEXT("Default");
+	}
+
+	if (const UEnum* CaptureSourceEnum = StaticEnum<ESceneCaptureSource>())
+	{
+		return CaptureSourceEnum->GetDisplayNameTextByValue(Settings.CaptureSource.GetValue()).ToString();
+	}
+
+	return FString::Printf(TEXT("%d"), static_cast<int32>(Settings.CaptureSource.GetValue()));
 }
 
 void UMinimapGeneratorManager::CleanupCaptureResources()
@@ -606,13 +730,15 @@ void UMinimapGeneratorManager::CleanupCaptureResources()
 	StagingPixelBuffer.Empty();
 }
 
-UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
+UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget()
 {
 	const int32 TileSetResolution = (Settings.bExportTileSet && CurrentTileLOD == 0)
 		                                ? Settings.TileSetOverviewResolution
 		                                : Settings.TileResolution;
 	const int32 TargetWidth = Settings.bUseTiling ? TileSetResolution : Settings.OutputWidth;
 	const int32 TargetHeight = Settings.bUseTiling ? TileSetResolution : Settings.OutputHeight;
+	Telemetry.RenderTargetSize = FIntPoint(TargetWidth, TargetHeight);
+	BroadcastTelemetry();
 
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
 
@@ -633,7 +759,7 @@ UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 	return RenderTarget;
 }
 
-ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget) const
+ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget)
 {
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World || !RenderTarget) return nullptr;
@@ -668,7 +794,10 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 	USceneCaptureComponent2D* CaptureComponent = CaptureActor->GetCaptureComponent2D();
 	// FILTERING
 	TArray<AActor*> FinalShowList;
+	const double ActorFilterStartTime = FPlatformTime::Seconds();
 	BuildFinalShowOnlyList(FinalShowList);
+	Telemetry.LastActorFilterSeconds = FPlatformTime::Seconds() - ActorFilterStartTime;
+	BroadcastTelemetry();
 
 	// CaptureComponent->ShowFlags = FEngineShowFlags(ESFIM_Editor);
 	CaptureComponent->ShowFlags.SetDynamicShadows(Settings.bCaptureDynamicShadows);
@@ -715,6 +844,7 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Scheduling GPU readback for captured render target."), __FUNCTION__);
+	UpdateTelemetryPhase(TEXT("Readback"));
 	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
 	if (!RenderTarget || !RenderTarget->GetResource())
 	{
@@ -750,6 +880,7 @@ void UMinimapGeneratorManager::ReadPixelsAndFinalize()
 	);
 
 	ReadbackFence.BeginFence();
+	TelemetryReadbackStartTime = FPlatformTime::Seconds();
 	ReadbackPollCount = 0;
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Render command enqueued. Readback fence started. Starting poll timer (0.1s)."), __FUNCTION__);
 
@@ -790,6 +921,12 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: Readback fence completed after %d polls."),
 			__FUNCTION__, ReadbackPollCount);
 		GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
+		if (TelemetryReadbackStartTime > 0.0)
+		{
+			Telemetry.LastReadbackSeconds = FPlatformTime::Seconds() - TelemetryReadbackStartTime;
+			TelemetryReadbackStartTime = 0.0;
+			BroadcastTelemetry();
+		}
 
 		if (ActiveCaptureActor.IsValid())
 		{
@@ -826,6 +963,7 @@ void UMinimapGeneratorManager::CheckReadbackStatus()
 
 void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData, int32 ImageWidth, int32 ImageHeight)
 {
+	UpdateTelemetryPhase(TEXT("Saving Image"));
 	FString FinalFileName = Settings.FileName;
 	if (Settings.bUseAutoFilename)
 	{
@@ -838,6 +976,8 @@ void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData, int3
 	const FString FullPath = FPaths::Combine(Settings.OutputPath, FinalFileName);
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting async image save task: %s (%dx%d)."), *FullPath, ImageWidth, ImageHeight);
 
+	TelemetryImageSaveStartTime = FPlatformTime::Seconds();
+	BroadcastTelemetry();
 	(new FAutoDeleteAsyncTask<FSaveImageTask>(MoveTemp(PixelData), ImageWidth, ImageHeight, FullPath, this))->
 		StartBackgroundTask();
 }
@@ -947,6 +1087,9 @@ void UMinimapGeneratorManager::StartTileSetCaptureProcess()
 	TileSetTilesSinceGarbageCollect = 0;
 
 	InitializeTileSetExportLevels();
+	Telemetry.TotalTiles = GetTileSetTotalTileCount();
+	Telemetry.CurrentLOD = 0;
+	BroadcastTelemetry();
 	if (TileSetExportLevels.Num() == 0)
 	{
 		OnCaptureComplete.Broadcast(false, TEXT("Invalid tile-set grid."));
@@ -1088,11 +1231,6 @@ void UMinimapGeneratorManager::CaptureNextTileSetTile()
 	const FVector TileCenter = TileWorldBounds.GetCenter();
 	const FVector TileSize = TileWorldBounds.GetSize();
 
-	ActiveCaptureActor->SetActorLocation(FVector(TileCenter.X, TileCenter.Y, Settings.CameraHeight));
-	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D();
-	CaptureComponent->OrthoWidth = FMath::Max(TileSize.X, TileSize.Y);
-	CaptureComponent->CaptureScene();
-
 	int32 TotalTiles = 0;
 	int32 CompletedBeforeLevel = 0;
 	for (int32 LevelIndex = 0; LevelIndex < TileSetExportLevels.Num(); ++LevelIndex)
@@ -1106,6 +1244,13 @@ void UMinimapGeneratorManager::CaptureNextTileSetTile()
 	}
 
 	const int32 CompletedTiles = CompletedBeforeLevel + CurrentTileIndex;
+	BeginTelemetryTile(CompletedTiles + 1, TotalTiles, CurrentTileLOD);
+
+	ActiveCaptureActor->SetActorLocation(FVector(TileCenter.X, TileCenter.Y, Settings.CameraHeight));
+	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D();
+	CaptureComponent->OrthoWidth = FMath::Max(TileSize.X, TileSize.Y);
+	CaptureComponent->CaptureScene();
+
 	const float CurrentProgress = TotalTiles > 0 ? static_cast<float>(CompletedTiles) / TotalTiles : 0.0f;
 	OnProgress.Broadcast(
 		FText::Format(FText::FromString("Capturing tile-set LOD {0} tile {1}/{2}..."),
@@ -1143,10 +1288,13 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 	int32 TileHeight = 0;
 	if (auto* RTResource = static_cast<FTextureRenderTargetResource*>(RenderTarget->GetResource()))
 	{
+		const double ReadbackStartTime = FPlatformTime::Seconds();
 		FlushRenderingCommands();
 		RTResource->ReadPixels(TilePixels);
+		Telemetry.LastReadbackSeconds = FPlatformTime::Seconds() - ReadbackStartTime;
 		TileWidth = RTResource->GetSizeX();
 		TileHeight = RTResource->GetSizeY();
+		BroadcastTelemetry();
 	}
 
 	if (TilePixels.Num() > 0)
@@ -1159,8 +1307,12 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 			+ BaseName + TEXT("/Tiles/LOD_") + FString::FromInt(CurrentTileLOD) + TEXT("/");
 		const FString TextureAssetName = FString::Printf(TEXT("T_%s_L%d_X%d_Y%d"), *BaseName, CurrentTileLOD, TileX, TileY);
 
+		UpdateTelemetryPhase(TEXT("Importing Tile"));
+		const double ImportStartTime = FPlatformTime::Seconds();
 		const TSoftObjectPtr<UTexture2D> TileTexture = ImportTileTextureAssetFromPixels(
 			TilePixels, TileWidth, TileHeight, TexturePackagePath, TextureAssetName);
+		Telemetry.LastImportSeconds = FPlatformTime::Seconds() - ImportStartTime;
+		BroadcastTelemetry();
 
 		const FBox TileWorldBounds = GetTileSetTileWorldBounds(CurrentTileLOD, TileX, TileY);
 		const FVector BoundsSize = Settings.CaptureBounds.GetSize();
@@ -1187,7 +1339,11 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 		if (TileSetTilesSinceGarbageCollect >= TileSetGarbageCollectBatchSize)
 		{
 			TileSetTilesSinceGarbageCollect = 0;
+			UpdateTelemetryPhase(TEXT("Garbage Collection"));
+			const double GCStartTime = FPlatformTime::Seconds();
 			CollectGarbage(RF_NoFlags);
+			Telemetry.LastGCSeconds = FPlatformTime::Seconds() - GCStartTime;
+			BroadcastTelemetry();
 		}
 	}
 	else
@@ -1196,12 +1352,14 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 			CurrentTileLOD, CurrentTileIndex);
 	}
 
+	CompleteTelemetryTile();
 	CurrentTileIndex++;
 	CaptureNextTileSetTile();
 }
 
 void UMinimapGeneratorManager::FinalizeTileSetExport()
 {
+	UpdateTelemetryPhase(TEXT("Saving TileSet Metadata"));
 	CleanupCaptureResources();
 	OnProgress.Broadcast(FText::FromString(TEXT("Saving tile-set metadata...")), 0.98f, 0, 0);
 
@@ -1230,9 +1388,15 @@ void UMinimapGeneratorManager::FinalizeTileSetExport()
 	}
 
 	OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
+	Telemetry.CurrentPhase = TEXT("Done");
+	Telemetry.bIsCapturing = false;
+	BroadcastTelemetry();
 	OnCaptureComplete.Broadcast(true, TileSetAsset->GetPathName());
 	TileSetExportLevels.Empty();
+	const double GCStartTime = FPlatformTime::Seconds();
 	CollectGarbage(RF_NoFlags);
+	Telemetry.LastGCSeconds = FPlatformTime::Seconds() - GCStartTime;
+	BroadcastTelemetry();
 }
 
 void UMinimapGeneratorManager::StartTiledCaptureProcess()
@@ -1244,6 +1408,8 @@ void UMinimapGeneratorManager::StartTiledCaptureProcess()
 	ActiveRenderTarget.Reset();
 
 	CalculateGrid();
+	Telemetry.TotalTiles = NumTilesX * NumTilesY;
+	BroadcastTelemetry();
 
 	if (NumTilesX * NumTilesY == 0)
 	{
@@ -1337,7 +1503,7 @@ void UMinimapGeneratorManager::CaptureNextTile()
 	// Set the OrthoWidth to the calculated square size of the tile's capture area
 	CaptureComponent->OrthoWidth = TileOrthoSize;
 
-
+	BeginTelemetryTile(CurrentTileIndex + 1, NumTilesX * NumTilesY, INDEX_NONE);
 	CaptureComponent->CaptureScene();
 
 	const float CurrentProgress = static_cast<float>(CurrentTileIndex) / (NumTilesX * NumTilesY);
@@ -1375,8 +1541,11 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 	TArray<FColor> TilePixels;
 	if (auto* RTResource = static_cast<FTextureRenderTargetResource*>(RenderTarget->GetResource()))
 	{
+		const double ReadbackStartTime = FPlatformTime::Seconds();
 		FlushRenderingCommands();
 		RTResource->ReadPixels(TilePixels);
+		Telemetry.LastReadbackSeconds = FPlatformTime::Seconds() - ReadbackStartTime;
+		BroadcastTelemetry();
 	}
 
 	if (TilePixels.Num() > 0)
@@ -1405,6 +1574,7 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("Tile %d rendered with empty pixel data."), CurrentTileIndex);
 	}
 
+	CompleteTelemetryTile();
 	CurrentTileIndex++;
 	CaptureNextTile();
 }
@@ -1412,6 +1582,7 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 void UMinimapGeneratorManager::StartStitching()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("All tiles captured. Starting stitching process..."));
+	UpdateTelemetryPhase(TEXT("Stitching"));
 	OnProgress.Broadcast(FText::FromString(TEXT("Stitching tiles...")), 0.9f, 0, 0);
 
 	if (ActiveCaptureActor.IsValid())

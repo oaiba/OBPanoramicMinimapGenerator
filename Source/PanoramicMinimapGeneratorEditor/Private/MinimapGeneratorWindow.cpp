@@ -31,6 +31,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Misc/MessageDialog.h"
 #include "HAL/PlatformMemory.h"
+#include "HAL/PlatformTime.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -49,6 +50,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 	Manager = TStrongObjectPtr<UMinimapGeneratorManager>(NewObject<UMinimapGeneratorManager>());
 	Manager->OnProgress.AddSP(this, &SMinimapGeneratorWindow::OnCaptureProgress);
 	Manager->OnCaptureComplete.AddSP(this, &SMinimapGeneratorWindow::HandleCaptureCompleted);
+	Manager->OnTelemetryUpdated.AddSP(this, &SMinimapGeneratorWindow::OnTelemetryUpdated);
 	OverlayLayers.AddDefaulted();
 
 	const FString DefaultPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir());
@@ -74,6 +76,9 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 	CurrentOutputWidth = ResolutionOptions[7];
 	CurrentOutputHeight = ResolutionOptions[7];
 	UpdateMemoryStatsCache();
+	LatestTelemetry = FMinimapCaptureTelemetry();
+	LatestTelemetryUpdateTime = FPlatformTime::Seconds();
+	UpdateTelemetryCache(LatestTelemetry);
 
 	// === NEW LAYOUT STRUCTURE START ===
 	ChildSlot
@@ -1024,12 +1029,46 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 				[
 					SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Hidden)
 				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10, 0, 0, 0)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+			[
+				SNew(SBorder)
+				.Padding(FMargin(8, 5))
+				.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
 				[
-					SAssignNew(MemoryStatsText, STextBlock)
-					.Text_Lambda([this] { return CachedMemoryStatsText; })
-					.ColorAndOpacity_Lambda([this] { return CachedMemoryStatsColor; })
-					.ToolTipText_Lambda([this] { return CachedMemoryStatsTooltip; })
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+						[
+							SAssignNew(MemoryStatsText, STextBlock)
+							.Text_Lambda([this] { return CachedMemoryStatsText; })
+							.ColorAndOpacity_Lambda([this] { return CachedMemoryStatsColor; })
+							.ToolTipText_Lambda([this] { return CachedMemoryStatsTooltip; })
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+						[
+							SAssignNew(TelemetrySummaryText, STextBlock)
+							.Text_Lambda([this] { return CachedTelemetrySummaryText; })
+							.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
+							.AutoWrapText(true)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SAssignNew(TelemetryTimingText, STextBlock)
+						.Text_Lambda([this] { return CachedTelemetryTimingText; })
+						.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
+						.AutoWrapText(true)
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SAssignNew(TelemetrySettingsText, STextBlock)
+						.Text_Lambda([this] { return CachedTelemetrySettingsText; })
+						.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
+						.AutoWrapText(true)
+					]
 				]
 			]
 		]
@@ -1065,6 +1104,7 @@ void SMinimapGeneratorWindow::UnbindManagerDelegates()
 	{
 		Manager->OnProgress.RemoveAll(this);
 		Manager->OnCaptureComplete.RemoveAll(this);
+		Manager->OnTelemetryUpdated.RemoveAll(this);
 	}
 }
 
@@ -1253,9 +1293,32 @@ void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Perce
 	}
 }
 
+void SMinimapGeneratorWindow::OnTelemetryUpdated(const FMinimapCaptureTelemetry& InTelemetry)
+{
+	if (IsEngineExitRequested() || !FSlateApplication::IsInitialized())
+	{
+		return;
+	}
+
+	LatestTelemetry = InTelemetry;
+	LatestTelemetryUpdateTime = FPlatformTime::Seconds();
+	UpdateTelemetryCache(LatestTelemetry);
+}
+
 EActiveTimerReturnType SMinimapGeneratorWindow::RefreshMemoryStats(double CurrentTime, float DeltaTime)
 {
 	UpdateMemoryStatsCache();
+	if (LatestTelemetry.bIsCapturing)
+	{
+		FMinimapCaptureTelemetry DisplayTelemetry = LatestTelemetry;
+		const double DisplayDeltaSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - LatestTelemetryUpdateTime);
+		DisplayTelemetry.ElapsedSeconds += DisplayDeltaSeconds;
+		if (DisplayTelemetry.EstimatedRemainingSeconds >= 0.0)
+		{
+			DisplayTelemetry.EstimatedRemainingSeconds = FMath::Max(0.0, DisplayTelemetry.EstimatedRemainingSeconds - DisplayDeltaSeconds);
+		}
+		UpdateTelemetryCache(DisplayTelemetry);
+	}
 	return EActiveTimerReturnType::Continue;
 }
 
@@ -1310,6 +1373,67 @@ void SMinimapGeneratorWindow::UpdateMemoryStatsCache()
 		*FDateTime::Now().ToString(TEXT("%H:%M:%S"))));
 }
 
+void SMinimapGeneratorWindow::UpdateTelemetryCache(const FMinimapCaptureTelemetry& InTelemetry)
+{
+	const FString TileText = InTelemetry.TotalTiles > 0
+		                         ? FString::Printf(TEXT("%d / %d"), InTelemetry.CurrentTile, InTelemetry.TotalTiles)
+		                         : TEXT("N/A");
+	const FString LODText = InTelemetry.CurrentLOD >= 0
+		                        ? FString::Printf(TEXT("LOD %d"), InTelemetry.CurrentLOD)
+		                        : TEXT("LOD N/A");
+	const FString ETAText = InTelemetry.EstimatedRemainingSeconds >= 0.0
+		                        ? FormatDurationSeconds(InTelemetry.EstimatedRemainingSeconds).ToString()
+		                        : (InTelemetry.bIsCapturing ? TEXT("Finalizing...") : TEXT("N/A"));
+
+	CachedTelemetrySummaryText = FText::FromString(FString::Printf(
+		TEXT("Mode: %s | Phase: %s | Tile: %s | %s | Elapsed: %s | ETA: %s"),
+		*InTelemetry.CaptureMode,
+		*InTelemetry.CurrentPhase,
+		*TileText,
+		*LODText,
+		*FormatDurationSeconds(InTelemetry.ElapsedSeconds).ToString(),
+		*ETAText));
+
+	CachedTelemetryTimingText = FText::FromString(FString::Printf(
+		TEXT("Tile: last %s | avg %s | Readback: %s | Import: %s | Save: %s | GC: %s"),
+		*FormatDurationSeconds(InTelemetry.LastTileSeconds).ToString(),
+		*FormatDurationSeconds(InTelemetry.AverageTileSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastReadbackSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastImportSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastPackageSaveSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastGCSeconds).ToString()));
+
+	CachedTelemetrySettingsText = FText::FromString(FString::Printf(
+		TEXT("RT: %s | Output: %s | TileRes: %d | Tiling: %s | TileSet: %s | Shadows: %s | Quality: %s | Source: %s"),
+		*FormatIntPoint(InTelemetry.RenderTargetSize).ToString(),
+		*FormatIntPoint(InTelemetry.OutputSize).ToString(),
+		InTelemetry.TileResolution,
+		InTelemetry.bUseTiling ? TEXT("On") : TEXT("Off"),
+		InTelemetry.bExportTileSet ? TEXT("On") : TEXT("Off"),
+		InTelemetry.bCaptureDynamicShadows ? TEXT("On") : TEXT("Off"),
+		InTelemetry.bOverrideWithHighQualitySettings ? TEXT("Override") : TEXT("Default"),
+		InTelemetry.CaptureSourceName.IsEmpty() ? TEXT("Default") : *InTelemetry.CaptureSourceName));
+
+	const bool bTileSpike = InTelemetry.AverageTileSeconds > 0.0
+		&& InTelemetry.LastTileSeconds > InTelemetry.AverageTileSeconds * 2.0;
+	CachedTelemetryTooltip = FText::FromString(FString::Printf(
+		TEXT("Capture Mode: %s\nPhase: %s\nTile: %s\nLOD: %s\nElapsed: %s\nETA: %s\nLast Tile: %s\nAverage Tile: %s\nReadback: %s\nImport: %s\nSave/Package: %s\nGC: %s\nActor Filter: %s\n%s"),
+		*InTelemetry.CaptureMode,
+		*InTelemetry.CurrentPhase,
+		*TileText,
+		*LODText,
+		*FormatDurationSeconds(InTelemetry.ElapsedSeconds).ToString(),
+		*ETAText,
+		*FormatDurationSeconds(InTelemetry.LastTileSeconds).ToString(),
+		*FormatDurationSeconds(InTelemetry.AverageTileSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastReadbackSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastImportSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastPackageSaveSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastGCSeconds).ToString(),
+		*FormatMilliseconds(InTelemetry.LastActorFilterSeconds).ToString(),
+		bTileSpike ? TEXT("Tile timing spike: last tile is above 2x average.") : TEXT("")));
+}
+
 FText SMinimapGeneratorWindow::FormatMemoryBytes(const uint64 Bytes) const
 {
 	constexpr double OneGB = 1024.0 * 1024.0 * 1024.0;
@@ -1336,6 +1460,50 @@ FText SMinimapGeneratorWindow::FormatMemoryPressureStatus(const FPlatformMemoryS
 	default:
 		return LOCTEXT("MemoryPressureUnknown", "Unknown");
 	}
+}
+
+FText SMinimapGeneratorWindow::FormatDurationSeconds(const double Seconds) const
+{
+	if (Seconds <= 0.0)
+	{
+		return FText::FromString(TEXT("0s"));
+	}
+
+	const int32 TotalSeconds = FMath::RoundToInt(Seconds);
+	const int32 Hours = TotalSeconds / 3600;
+	const int32 Minutes = (TotalSeconds % 3600) / 60;
+	const int32 RemainingSeconds = TotalSeconds % 60;
+	if (Hours > 0)
+	{
+		return FText::FromString(FString::Printf(TEXT("%02d:%02d:%02d"), Hours, Minutes, RemainingSeconds));
+	}
+
+	return FText::FromString(FString::Printf(TEXT("%02d:%02d"), Minutes, RemainingSeconds));
+}
+
+FText SMinimapGeneratorWindow::FormatMilliseconds(const double Seconds) const
+{
+	if (Seconds <= 0.0)
+	{
+		return FText::FromString(TEXT("0ms"));
+	}
+
+	if (Seconds >= 1.0)
+	{
+		return FText::FromString(FString::Printf(TEXT("%.2fs"), Seconds));
+	}
+
+	return FText::FromString(FString::Printf(TEXT("%.0fms"), Seconds * 1000.0));
+}
+
+FText SMinimapGeneratorWindow::FormatIntPoint(const FIntPoint Point) const
+{
+	if (Point.X <= 0 || Point.Y <= 0)
+	{
+		return FText::FromString(TEXT("N/A"));
+	}
+
+	return FText::FromString(FString::Printf(TEXT("%dx%d"), Point.X, Point.Y));
 }
 
 ECheckBoxState SMinimapGeneratorWindow::IsBackgroundModeChecked(EMinimapBackgroundMode Mode) const

@@ -141,10 +141,38 @@ struct FMinimapCaptureSettings
 
 class FMinimapStreamingSourceProvider;
 
+struct FMinimapCaptureTelemetry
+{
+	FString CaptureMode = TEXT("Idle");
+	FString CurrentPhase = TEXT("Idle");
+	int32 CurrentTile = 0;
+	int32 TotalTiles = 0;
+	int32 CurrentLOD = INDEX_NONE;
+	double ElapsedSeconds = 0.0;
+	double EstimatedRemainingSeconds = -1.0;
+	double LastTileSeconds = 0.0;
+	double AverageTileSeconds = 0.0;
+	double LastReadbackSeconds = 0.0;
+	double LastImportSeconds = 0.0;
+	double LastPackageSaveSeconds = 0.0;
+	double LastGCSeconds = 0.0;
+	double LastActorFilterSeconds = 0.0;
+	FIntPoint OutputSize = FIntPoint::ZeroValue;
+	FIntPoint RenderTargetSize = FIntPoint::ZeroValue;
+	int32 TileResolution = 0;
+	bool bUseTiling = false;
+	bool bExportTileSet = false;
+	bool bCaptureDynamicShadows = false;
+	bool bOverrideWithHighQualitySettings = false;
+	FString CaptureSourceName;
+	bool bIsCapturing = false;
+};
+
 // Delegate to report progress back to the UI
 DECLARE_MULTICAST_DELEGATE_FourParams(FOnMinimapProgress, const FText&, /*Status*/ float, /*Percentage*/ int32,
                                       /*CurrentTile*/ int32 /*TotalTiles*/);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnMinimapCaptureComplete, bool /*bSuccess*/, const FString& /*FinalImagePath*/);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnMinimapTelemetryUpdated, const FMinimapCaptureTelemetry&);
 
 /**
  * 
@@ -162,6 +190,7 @@ public:
 	// Delegate for UI updates
 	FOnMinimapProgress OnProgress;
 	FOnMinimapCaptureComplete OnCaptureComplete;
+	FOnMinimapTelemetryUpdated OnTelemetryUpdated;
 	
 	// Cancel an ongoing capture process
 	void CancelCapture();
@@ -176,21 +205,28 @@ private:
 	void OnAllTasksCompleted();
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
-	UTexture2D* ImportTextureAssetFromSavedImage(const FString& SavedImagePath) const;
+	UTexture2D* ImportTextureAssetFromSavedImage(const FString& SavedImagePath);
 	TSoftObjectPtr<UTexture2D> ImportTileTextureAssetFromPixels(const TArray<FColor>& PixelData, int32 Width, int32 Height,
-	                                                            const FString& PackagePath, const FString& AssetName) const;
+	                                                            const FString& PackagePath, const FString& AssetName);
 	UMinimapDefinitionDataAsset* CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture,
-	                                                           UMinimapTileSetDataAsset* TileSet = nullptr) const;
-	UMinimapTileSetDataAsset* CreateOrUpdateTileSetAsset() const;
-	bool SaveAssetPackage(UPackage* Package, UObject* Asset) const;
+	                                                           UMinimapTileSetDataAsset* TileSet = nullptr);
+	UMinimapTileSetDataAsset* CreateOrUpdateTileSetAsset();
+	bool SaveAssetPackage(UPackage* Package, UObject* Asset);
 	void CleanupCaptureResources();
+	void ResetTelemetry(const FString& CaptureMode, const FString& Phase);
+	void UpdateTelemetryPhase(const FString& Phase);
+	void BeginTelemetryTile(int32 CurrentTile, int32 TotalTiles, int32 LOD);
+	void CompleteTelemetryTile();
+	void BroadcastTelemetry();
+	int32 GetTileSetTotalTileCount() const;
+	FString GetCaptureSourceTelemetryName() const;
 
 	// === FUNCTIONS FOR SINGLE CAPTURE ===
 	/** Create and configure the Render Target to draw to. */
-	UTextureRenderTarget2D* CreateRenderTarget() const;
+	UTextureRenderTarget2D* CreateRenderTarget();
 
 	/** Spawn, configure, and position the Scene Capture Actor. */
-	ASceneCapture2D* SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget) const;
+	ASceneCapture2D* SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget);
 
 	/** Called by Timer to read pixels, clean up, and start saving. */
 	void ReadPixelsAndFinalize();
@@ -244,6 +280,14 @@ private:
 	int32 CurrentTileLOD = 0;
 	FIntPoint CurrentTileSetGrid = FIntPoint::ZeroValue;
 	int32 TileSetTilesSinceGarbageCollect = 0;
+	FMinimapCaptureTelemetry Telemetry;
+	double TelemetryCaptureStartTime = 0.0;
+	double TelemetryCurrentTileStartTime = 0.0;
+	double TelemetryImageSaveStartTime = 0.0;
+	double TelemetryReadbackStartTime = 0.0;
+	int32 TelemetryCompletedTiles = 0;
+	int32 TelemetryTimedTileCount = 0;
+	double TelemetryTileSecondsTotal = 0.0;
 	void StartTileSetCaptureProcess();
 	void InitializeTileSetExportLevels();
 	bool AdvanceToNextTileSetLevel();

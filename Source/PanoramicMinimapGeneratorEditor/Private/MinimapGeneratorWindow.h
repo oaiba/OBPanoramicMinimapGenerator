@@ -42,12 +42,17 @@ private:
 	bool IsPerspectiveMode() const;
 	/** Called by manager delegates to update UI state. */
 	void OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles);
+	void OnTelemetryUpdated(const FMinimapCaptureTelemetry& InTelemetry);
 	void UnbindManagerDelegates();
 	void ReleasePreviewResources();
 	EActiveTimerReturnType RefreshMemoryStats(double CurrentTime, float DeltaTime);
 	void UpdateMemoryStatsCache();
+	void UpdateTelemetryCache(const FMinimapCaptureTelemetry& InTelemetry);
 	FText FormatMemoryBytes(uint64 Bytes) const;
 	FText FormatMemoryPressureStatus(FPlatformMemoryStats::EMemoryPressureStatus Status) const;
+	FText FormatDurationSeconds(double Seconds) const;
+	FText FormatMilliseconds(double Seconds) const;
+	FText FormatIntPoint(FIntPoint Point) const;
 
 	// === BACKGROUND MODE STATE ===
 	/** Current background mode selected in UI. */
@@ -192,9 +197,18 @@ private:
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;
 	TSharedPtr<STextBlock> MemoryStatsText;
+	TSharedPtr<STextBlock> TelemetrySummaryText;
+	TSharedPtr<STextBlock> TelemetryTimingText;
+	TSharedPtr<STextBlock> TelemetrySettingsText;
 	FText CachedMemoryStatsText;
 	FSlateColor CachedMemoryStatsColor = FSlateColor::UseForeground();
 	FText CachedMemoryStatsTooltip;
+	FText CachedTelemetrySummaryText;
+	FText CachedTelemetryTimingText;
+	FText CachedTelemetrySettingsText;
+	FText CachedTelemetryTooltip;
+	FMinimapCaptureTelemetry LatestTelemetry;
+	double LatestTelemetryUpdateTime = 0.0;
 	TSharedPtr<SButton> StartButton;
 	TSharedPtr<SButton> CancelButton;
 
