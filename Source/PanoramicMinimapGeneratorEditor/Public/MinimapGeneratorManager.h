@@ -168,6 +168,14 @@ struct FMinimapCaptureTelemetry
 	bool bIsCapturing = false;
 };
 
+struct FLegacyCapturedTileRef
+{
+	FIntPoint Coord = FIntPoint::ZeroValue;
+	FString RawTilePath;
+	int32 Width = 0;
+	int32 Height = 0;
+};
+
 // Delegate to report progress back to the UI
 DECLARE_MULTICAST_DELEGATE_FourParams(FOnMinimapProgress, const FText&, /*Status*/ float, /*Percentage*/ int32,
                                       /*CurrentTile*/ int32 /*TotalTiles*/);
@@ -213,6 +221,14 @@ private:
 	UMinimapTileSetDataAsset* CreateOrUpdateTileSetAsset();
 	bool SaveAssetPackage(UPackage* Package, UObject* Asset);
 	void CleanupCaptureResources();
+	void ReleaseCaptureResources(bool bFlushRendering);
+	void PrepareTileTextureForUnload(UTexture2D* Texture, UPackage* Package);
+	void ReleaseTileImportPackage(UPackage* Package, UTexture2D* Texture, const FString& AssetPath);
+	void RetryUnloadPendingTilePackages();
+	void ReleaseWorkingMemory(bool bFinalCleanup);
+	void ResetMemoryCleanupPolicy();
+	void MaybeRunTileSetMemoryMaintenance(const TCHAR* Reason);
+	void RunTileSetMemoryMaintenance(const TCHAR* Reason, bool bFlushRendering);
 	void ResetTelemetry(const FString& CaptureMode, const FString& Phase);
 	void UpdateTelemetryPhase(const FString& Phase);
 	void BeginTelemetryTile(int32 CurrentTile, int32 TotalTiles, int32 LOD);
@@ -220,6 +236,7 @@ private:
 	void BroadcastTelemetry();
 	int32 GetTileSetTotalTileCount() const;
 	FString GetCaptureSourceTelemetryName() const;
+	void TracePanoramicMemory(const TCHAR* Keyword, const FString& Detail) const;
 
 	// === FUNCTIONS FOR SINGLE CAPTURE ===
 	/** Create and configure the Render Target to draw to. */
@@ -263,7 +280,10 @@ private:
 
 	// Member variables
 	FMinimapCaptureSettings Settings;
-	TMap<FIntPoint, TArray<FColor>> CapturedTileData;
+	TArray<FLegacyCapturedTileRef> LegacyCapturedTiles;
+	TArray<FString> PendingUnloadTilePackageNames;
+	FString LegacyTileTempDirectory;
+	FString CaptureSessionId;
 	int32 NumTilesX = 0;
 	int32 NumTilesY = 0;
 	int32 CurrentTileIndex = 0;
@@ -272,6 +292,9 @@ private:
 	void CaptureNextTile();
 	void OnTileRenderedAndContinue();
 	void StartStitching();
+	bool WriteLegacyTileToTempFile(const TArray<FColor>& PixelData, int32 TileX, int32 TileY, int32 Width, int32 Height);
+	bool LoadLegacyTileFromTempFile(const FLegacyCapturedTileRef& TileRef, TArray<FColor>& OutPixels) const;
+	void CleanupLegacyTileTempFiles();
 	
 	FIntPoint CurrentCaptureTilePosition;
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
@@ -279,7 +302,20 @@ private:
 	TArray<FMinimapTilePyramidLevel> TileSetExportLevels;
 	int32 CurrentTileLOD = 0;
 	FIntPoint CurrentTileSetGrid = FIntPoint::ZeroValue;
-	int32 TileSetTilesSinceGarbageCollect = 0;
+	struct FMinimapMemoryCleanupPolicy
+	{
+		int32 TilesSinceLastGC = 0;
+		int32 TilesSinceLastPackageRetry = 0;
+		uint64 LastGCUsedPhysical = 0;
+		uint64 LastGCAvailablePhysical = 0;
+		double LastGCTimeSeconds = 0.0;
+		int32 MinTilesBetweenGC = 12;
+		int32 MaxTilesBetweenGC = 24;
+		uint64 UsedGrowthTriggerBytes = 384ull * 1024ull * 1024ull;
+		uint64 AvailableDropTriggerBytes = 512ull * 1024ull * 1024ull;
+		double MinSecondsBetweenGC = 2.0;
+	};
+	FMinimapMemoryCleanupPolicy MemoryCleanupPolicy;
 	FMinimapCaptureTelemetry Telemetry;
 	double TelemetryCaptureStartTime = 0.0;
 	double TelemetryCurrentTileStartTime = 0.0;

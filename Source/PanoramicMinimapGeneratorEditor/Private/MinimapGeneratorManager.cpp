@@ -8,6 +8,8 @@
 #include "IImageWrapperModule.h"
 #include "IImageWrapper.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMemory.h"
+#include "HAL/IConsoleManager.h"
 #include "Async/Async.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/SceneCapture2D.h"
@@ -86,7 +88,36 @@ namespace
 {
 constexpr int64 MaxLegacyStitchedPixels = 8192LL * 8192LL;
 constexpr int64 MaxImmediateTextureResourcePixels = 4096LL * 4096LL;
-constexpr int32 TileSetGarbageCollectBatchSize = 12;
+
+static TAutoConsoleVariable<int32> CVarPanoramicMemoryTrace(
+	TEXT("OB.Panoramic.MemoryTrace"),
+	0,
+	TEXT("Enable verbose PANOMEM memory lifecycle traces for the Panoramic Minimap Generator. 0=off, 1=on."),
+	ECVF_Default);
+
+bool IsPanoramicMemoryTraceEnabled()
+{
+	return CVarPanoramicMemoryTrace.GetValueOnGameThread() != 0;
+}
+
+FString FormatTraceBytes(const uint64 Bytes)
+{
+	constexpr double OneGB = 1024.0 * 1024.0 * 1024.0;
+	constexpr double OneMB = 1024.0 * 1024.0;
+	if (Bytes >= static_cast<uint64>(OneGB))
+	{
+		return FString::Printf(TEXT("%.2f GB"), static_cast<double>(Bytes) / OneGB);
+	}
+
+	return FString::Printf(TEXT("%.0f MB"), static_cast<double>(Bytes) / OneMB);
+}
+
+FString FormatTraceBytesDelta(const int64 Bytes)
+{
+	const FString Prefix = Bytes >= 0 ? TEXT("+") : TEXT("-");
+	const uint64 AbsoluteBytes = static_cast<uint64>(FMath::Abs(Bytes));
+	return Prefix + FormatTraceBytes(AbsoluteBytes);
+}
 
 FString MakeSafeAssetName(const FString& InName)
 {
@@ -189,6 +220,14 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	bCancelRequested = false;
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
+	TracePanoramicMemory(TEXT("CAPTURE_START_BEGIN"), FString::Printf(
+		TEXT("UseTiling=%s ExportTileSet=%s Output=%dx%d TileRes=%d TileOverlap=%d"),
+		Settings.bUseTiling ? TEXT("true") : TEXT("false"),
+		Settings.bExportTileSet ? TEXT("true") : TEXT("false"),
+		Settings.OutputWidth,
+		Settings.OutputHeight,
+		Settings.TileResolution,
+		Settings.TileOverlap));
 
 	if (!Settings.CaptureBounds.IsValid || Settings.OutputWidth <= 0 || Settings.OutputHeight <= 0)
 	{
@@ -224,6 +263,7 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 		? (Settings.bExportTileSet ? TEXT("Tile Set + LOD") : TEXT("Legacy Tiled Stitch"))
 		: TEXT("Single Capture");
 	ResetTelemetry(CaptureMode, TEXT("Starting"));
+	TracePanoramicMemory(TEXT("CAPTURE_MODE_SELECTED"), FString::Printf(TEXT("Mode=%s"), *CaptureMode));
 	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
 	if (Settings.bUseTiling && Settings.bExportTileSet)
 	{
@@ -250,10 +290,9 @@ void UMinimapGeneratorManager::ShutdownCapture(const bool bBroadcastResult)
 	bCancelRequested = true;
 	bIsShuttingDown = !bBroadcastResult;
 
-	CleanupCaptureResources();
-	CapturedTileData.Empty();
-	TileSetExportLevels.Empty();
-	TileSetTilesSinceGarbageCollect = 0;
+	TracePanoramicMemory(TEXT("SHUTDOWN_BEGIN"), FString::Printf(TEXT("BroadcastResult=%s"), bBroadcastResult ? TEXT("true") : TEXT("false")));
+	ReleaseWorkingMemory(true);
+	TracePanoramicMemory(TEXT("SHUTDOWN_AFTER_RELEASE"), FString::Printf(TEXT("BroadcastResult=%s"), bBroadcastResult ? TEXT("true") : TEXT("false")));
 	if (bBroadcastResult)
 	{
 		Telemetry.CurrentPhase = TEXT("Cancelled");
@@ -288,10 +327,14 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 	if (bSuccess)
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Async save task completed successfully. Path: %s"), *SavedImagePath);
+		TracePanoramicMemory(TEXT("SAVE_TASK_SUCCESS"), FString::Printf(TEXT("Path=%s"), *SavedImagePath));
 	}
 	else
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Async save task failed."));
+		TracePanoramicMemory(TEXT("SAVE_TASK_FAILED_BEFORE_CLEANUP"), FString::Printf(TEXT("Reason=%s"), *SavedImagePath));
+		ReleaseWorkingMemory(true);
+		TracePanoramicMemory(TEXT("SAVE_TASK_FAILED_AFTER_CLEANUP"), FString::Printf(TEXT("Reason=%s"), *SavedImagePath));
 		Telemetry.CurrentPhase = TEXT("Failed");
 		Telemetry.bIsCapturing = false;
 		BroadcastTelemetry();
@@ -338,6 +381,9 @@ void UMinimapGeneratorManager::OnSaveTaskCompleted(const bool bSuccess, const FS
 	BroadcastTelemetry();
 	OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
 	OnCaptureComplete.Broadcast(true, SavedImagePath);
+	TracePanoramicMemory(TEXT("CAPTURE_DONE_BEFORE_FINAL_CLEANUP"), FString::Printf(TEXT("Path=%s"), *SavedImagePath));
+	ReleaseWorkingMemory(true);
+	TracePanoramicMemory(TEXT("CAPTURE_DONE_AFTER_FINAL_CLEANUP"), FString::Printf(TEXT("Path=%s"), *SavedImagePath));
 }
 
 // ===================================================================
@@ -494,11 +540,14 @@ TSoftObjectPtr<UTexture2D> UMinimapGeneratorManager::ImportTileTextureAssetFromP
 	NewTexture->MarkPackageDirty();
 	Package->MarkPackageDirty();
 
-	SaveAssetPackage(Package, NewTexture);
-
 	const FSoftObjectPath TexturePath(FString::Printf(TEXT("%s.%s"), *FullAssetPath, *SafeAssetName));
-	FText UnloadErrorMessage;
-	UPackageTools::UnloadPackages({Package}, UnloadErrorMessage, true);
+	const bool bSaved = SaveAssetPackage(Package, NewTexture);
+	ReleaseTileImportPackage(Package, bSaved ? NewTexture : nullptr, TexturePath.ToString());
+	if (!bSaved)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("Tile texture package save failed, returning empty soft path: %s"), *TexturePath.ToString());
+		return nullptr;
+	}
 
 	return TSoftObjectPtr<UTexture2D>(TexturePath);
 }
@@ -702,8 +751,48 @@ FString UMinimapGeneratorManager::GetCaptureSourceTelemetryName() const
 	return FString::Printf(TEXT("%d"), static_cast<int32>(Settings.CaptureSource.GetValue()));
 }
 
+void UMinimapGeneratorManager::TracePanoramicMemory(const TCHAR* Keyword, const FString& Detail) const
+{
+	if (!IsPanoramicMemoryTraceEnabled())
+	{
+		return;
+	}
+
+	const FPlatformMemoryStats Stats = FPlatformMemory::GetStats();
+	const UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
+	const ASceneCapture2D* CaptureActor = ActiveCaptureActor.Get();
+	const FString RenderTargetText = RenderTarget
+		                                 ? FString::Printf(TEXT("%s@%p"), *RenderTarget->GetName(), RenderTarget)
+		                                 : TEXT("null");
+	const FString CaptureActorText = CaptureActor
+		                                 ? FString::Printf(TEXT("%s@%p"), *CaptureActor->GetName(), CaptureActor)
+		                                 : TEXT("null");
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log,
+		TEXT("[PANOMEM][%s] %s | Avail=%s Used=%s Peak=%s Total=%s | RT=%s Actor=%s | StagingPixels=%d LegacyTiles=%d TileSetLevels=%d PendingUnload=%d TempDir=%s"),
+		Keyword,
+		*Detail,
+		*FormatTraceBytes(Stats.AvailablePhysical),
+		*FormatTraceBytes(Stats.UsedPhysical),
+		*FormatTraceBytes(Stats.PeakUsedPhysical),
+		*FormatTraceBytes(Stats.TotalPhysical),
+		*RenderTargetText,
+		*CaptureActorText,
+		StagingPixelBuffer.Num(),
+		LegacyCapturedTiles.Num(),
+		TileSetExportLevels.Num(),
+		PendingUnloadTilePackageNames.Num(),
+		LegacyTileTempDirectory.IsEmpty() ? TEXT("none") : *LegacyTileTempDirectory);
+}
+
 void UMinimapGeneratorManager::CleanupCaptureResources()
 {
+	ReleaseCaptureResources(false);
+}
+
+void UMinimapGeneratorManager::ReleaseCaptureResources(const bool bFlushRendering)
+{
+	TracePanoramicMemory(TEXT("RELEASE_CAPTURE_BEGIN"), FString::Printf(TEXT("FlushRendering=%s"), bFlushRendering ? TEXT("true") : TEXT("false")));
 	if (GEditor)
 	{
 		GEditor->GetTimerManager()->ClearTimer(ReadbackPollTimer);
@@ -718,20 +807,282 @@ void UMinimapGeneratorManager::CleanupCaptureResources()
 
 	if (ActiveCaptureActor.IsValid())
 	{
+		TracePanoramicMemory(TEXT("POINTER_REMOVE_CAPTURE_ACTOR_BEGIN"), FString::Printf(TEXT("Actor=%s@%p"),
+			*ActiveCaptureActor->GetName(),
+			ActiveCaptureActor.Get()));
+		if (USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D())
+		{
+			CaptureComponent->TextureTarget = nullptr;
+		}
 		ActiveCaptureActor->Destroy();
+		TracePanoramicMemory(TEXT("POINTER_REMOVE_CAPTURE_ACTOR_DESTROYED"), TEXT("Capture actor destroy requested"));
 	}
 	ActiveCaptureActor.Reset();
 
 	if (ActiveRenderTarget.IsValid())
 	{
+		TracePanoramicMemory(TEXT("POINTER_REMOVE_RENDER_TARGET_BEGIN"), FString::Printf(TEXT("RenderTarget=%s@%p"),
+			*ActiveRenderTarget->GetName(),
+			ActiveRenderTarget.Get()));
+		ActiveRenderTarget->ReleaseResource();
 		ActiveRenderTarget->ConditionalBeginDestroy();
+		TracePanoramicMemory(TEXT("POINTER_REMOVE_RENDER_TARGET_RELEASED"), TEXT("Render target release requested"));
 	}
 	ActiveRenderTarget.Reset();
+	TracePanoramicMemory(TEXT("BUFFER_CLEAR_STAGING_BEGIN"), FString::Printf(TEXT("StagingPixels=%d"), StagingPixelBuffer.Num()));
 	StagingPixelBuffer.Empty();
+	StagingPixelBuffer.Shrink();
+	TracePanoramicMemory(TEXT("BUFFER_CLEAR_STAGING_END"), TEXT("Staging buffer emptied and shrunk"));
+
+	if (bFlushRendering)
+	{
+		TracePanoramicMemory(TEXT("GPU_FLUSH_BEGIN"), TEXT("FlushRenderingCommands before returning capture resources"));
+		FlushRenderingCommands();
+		TracePanoramicMemory(TEXT("GPU_FLUSH_END"), TEXT("FlushRenderingCommands completed"));
+	}
+	TracePanoramicMemory(TEXT("RELEASE_CAPTURE_END"), FString::Printf(TEXT("FlushRendering=%s"), bFlushRendering ? TEXT("true") : TEXT("false")));
+}
+
+void UMinimapGeneratorManager::PrepareTileTextureForUnload(UTexture2D* Texture, UPackage* Package)
+{
+	const FString PackageName = Package ? Package->GetName() : TEXT("null");
+	const FString TextureName = Texture ? Texture->GetName() : TEXT("null");
+	TracePanoramicMemory(TEXT("TILE_TEXTURE_PREPARE_UNLOAD_BEGIN"), FString::Printf(TEXT("Package=%s Texture=%s@%p"),
+		*PackageName,
+		*TextureName,
+		Texture));
+
+	if (Texture)
+	{
+		if (Texture->IsRooted())
+		{
+			Texture->RemoveFromRoot();
+		}
+		Texture->ClearFlags(RF_Standalone | RF_Public);
+		Texture->MarkAsGarbage();
+	}
+
+	if (Package)
+	{
+		Package->SetDirtyFlag(false);
+	}
+
+	TracePanoramicMemory(TEXT("TILE_TEXTURE_PREPARE_UNLOAD_END"), FString::Printf(TEXT("Package=%s Texture=%s"), *PackageName, *TextureName));
+}
+
+void UMinimapGeneratorManager::ReleaseTileImportPackage(UPackage* Package, UTexture2D* Texture, const FString& AssetPath)
+{
+	if (!Package)
+	{
+		return;
+	}
+
+	const FString PackageName = Package->GetName();
+	TracePanoramicMemory(TEXT("TILE_PACKAGE_UNLOAD_BEGIN"), FString::Printf(TEXT("Package=%s Asset=%s Texture=%s@%p"),
+		*PackageName,
+		*AssetPath,
+		Texture ? *Texture->GetName() : TEXT("null"),
+		Texture));
+	PrepareTileTextureForUnload(Texture, Package);
+	FText UnloadErrorMessage;
+	const bool bUnloaded = UPackageTools::UnloadPackages({Package}, UnloadErrorMessage, true);
+	if (!bUnloaded)
+	{
+		PendingUnloadTilePackageNames.AddUnique(PackageName);
+		if (IsPanoramicMemoryTraceEnabled())
+		{
+			UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANOMEM][TILE_PACKAGE_UNLOAD_DEFERRED] Package=%s Asset=%s Error=%s"),
+				*PackageName,
+				*AssetPath,
+				*UnloadErrorMessage.ToString());
+		}
+	}
+	else
+	{
+		TracePanoramicMemory(TEXT("TILE_PACKAGE_UNLOAD_SUCCESS"), FString::Printf(TEXT("Package=%s Asset=%s"), *PackageName, *AssetPath));
+	}
+}
+
+void UMinimapGeneratorManager::ResetMemoryCleanupPolicy()
+{
+	MemoryCleanupPolicy = FMinimapMemoryCleanupPolicy();
+	const FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
+	MemoryCleanupPolicy.LastGCUsedPhysical = MemoryStats.UsedPhysical;
+	MemoryCleanupPolicy.LastGCAvailablePhysical = MemoryStats.AvailablePhysical;
+	MemoryCleanupPolicy.LastGCTimeSeconds = FPlatformTime::Seconds();
+	TracePanoramicMemory(TEXT("MAINTENANCE_POLICY_RESET"), FString::Printf(TEXT("Used=%s Available=%s MinTiles=%d MaxTiles=%d UsedTrigger=%s AvailableDropTrigger=%s"),
+		*FormatTraceBytes(MemoryCleanupPolicy.LastGCUsedPhysical),
+		*FormatTraceBytes(MemoryCleanupPolicy.LastGCAvailablePhysical),
+		MemoryCleanupPolicy.MinTilesBetweenGC,
+		MemoryCleanupPolicy.MaxTilesBetweenGC,
+		*FormatTraceBytes(MemoryCleanupPolicy.UsedGrowthTriggerBytes),
+		*FormatTraceBytes(MemoryCleanupPolicy.AvailableDropTriggerBytes)));
+}
+
+void UMinimapGeneratorManager::MaybeRunTileSetMemoryMaintenance(const TCHAR* Reason)
+{
+	MemoryCleanupPolicy.TilesSinceLastGC++;
+	MemoryCleanupPolicy.TilesSinceLastPackageRetry++;
+
+	const FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
+	const double CurrentTime = FPlatformTime::Seconds();
+	const bool bPastMinTiles = MemoryCleanupPolicy.TilesSinceLastGC >= MemoryCleanupPolicy.MinTilesBetweenGC;
+	const bool bReachedMaxTiles = MemoryCleanupPolicy.TilesSinceLastGC >= MemoryCleanupPolicy.MaxTilesBetweenGC;
+	const bool bPastMinSeconds = (CurrentTime - MemoryCleanupPolicy.LastGCTimeSeconds) >= MemoryCleanupPolicy.MinSecondsBetweenGC;
+	const uint64 UsedGrowth = MemoryStats.UsedPhysical > MemoryCleanupPolicy.LastGCUsedPhysical
+		                          ? MemoryStats.UsedPhysical - MemoryCleanupPolicy.LastGCUsedPhysical
+		                          : 0;
+	const uint64 AvailableDrop = MemoryCleanupPolicy.LastGCAvailablePhysical > MemoryStats.AvailablePhysical
+		                             ? MemoryCleanupPolicy.LastGCAvailablePhysical - MemoryStats.AvailablePhysical
+		                             : 0;
+	const bool bUsedGrowthTrigger = UsedGrowth >= MemoryCleanupPolicy.UsedGrowthTriggerBytes;
+	const bool bAvailableDropTrigger = AvailableDrop >= MemoryCleanupPolicy.AvailableDropTriggerBytes;
+	const bool bPendingRetryTrigger = PendingUnloadTilePackageNames.Num() > 0
+		&& MemoryCleanupPolicy.TilesSinceLastPackageRetry >= MemoryCleanupPolicy.MinTilesBetweenGC;
+
+	if (bReachedMaxTiles || (bPastMinTiles && bPastMinSeconds && (bUsedGrowthTrigger || bAvailableDropTrigger || bPendingRetryTrigger)))
+	{
+		RunTileSetMemoryMaintenance(Reason, bUsedGrowthTrigger || bAvailableDropTrigger);
+	}
+}
+
+void UMinimapGeneratorManager::RunTileSetMemoryMaintenance(const TCHAR* Reason, const bool bFlushRendering)
+{
+	const FPlatformMemoryStats BeforeStats = FPlatformMemory::GetStats();
+	const uint64 UsedDeltaSinceLastGC = BeforeStats.UsedPhysical > MemoryCleanupPolicy.LastGCUsedPhysical
+		                                    ? BeforeStats.UsedPhysical - MemoryCleanupPolicy.LastGCUsedPhysical
+		                                    : 0;
+	const uint64 AvailableDropSinceLastGC = MemoryCleanupPolicy.LastGCAvailablePhysical > BeforeStats.AvailablePhysical
+		                                        ? MemoryCleanupPolicy.LastGCAvailablePhysical - BeforeStats.AvailablePhysical
+		                                        : 0;
+	UpdateTelemetryPhase(TEXT("Memory Maintenance"));
+	TracePanoramicMemory(TEXT("MAINTENANCE_BEGIN"), FString::Printf(TEXT("Reason=%s TilesSinceGC=%d TilesSinceRetry=%d PendingUnload=%d UsedGrowth=%s AvailableDrop=%s FlushRendering=%s"),
+		Reason ? Reason : TEXT("Unknown"),
+		MemoryCleanupPolicy.TilesSinceLastGC,
+		MemoryCleanupPolicy.TilesSinceLastPackageRetry,
+		PendingUnloadTilePackageNames.Num(),
+		*FormatTraceBytes(UsedDeltaSinceLastGC),
+		*FormatTraceBytes(AvailableDropSinceLastGC),
+		bFlushRendering ? TEXT("true") : TEXT("false")));
+
+	RetryUnloadPendingTilePackages();
+
+	if (bFlushRendering)
+	{
+		TracePanoramicMemory(TEXT("MAINTENANCE_GPU_FLUSH_BEGIN"), TEXT("FlushRenderingCommands before adaptive GC"));
+		FlushRenderingCommands();
+		TracePanoramicMemory(TEXT("MAINTENANCE_GPU_FLUSH_END"), TEXT("FlushRenderingCommands completed"));
+	}
+
+	const double GCStartTime = FPlatformTime::Seconds();
+	CollectGarbage(RF_NoFlags);
+	Telemetry.LastGCSeconds = FPlatformTime::Seconds() - GCStartTime;
+	const FPlatformMemoryStats AfterStats = FPlatformMemory::GetStats();
+	const int64 UsedDelta = static_cast<int64>(AfterStats.UsedPhysical) - static_cast<int64>(BeforeStats.UsedPhysical);
+	const int64 AvailableDelta = static_cast<int64>(AfterStats.AvailablePhysical) - static_cast<int64>(BeforeStats.AvailablePhysical);
+
+	MemoryCleanupPolicy.TilesSinceLastGC = 0;
+	MemoryCleanupPolicy.TilesSinceLastPackageRetry = 0;
+	MemoryCleanupPolicy.LastGCUsedPhysical = AfterStats.UsedPhysical;
+	MemoryCleanupPolicy.LastGCAvailablePhysical = AfterStats.AvailablePhysical;
+	MemoryCleanupPolicy.LastGCTimeSeconds = FPlatformTime::Seconds();
+	Telemetry.CurrentPhase = TEXT("Memory Maintenance");
+	BroadcastTelemetry();
+	TracePanoramicMemory(TEXT("MAINTENANCE_GC_END"), FString::Printf(TEXT("Reason=%s Duration=%.3fs UsedDelta=%s AvailableDelta=%s PendingUnload=%d"),
+		Reason ? Reason : TEXT("Unknown"),
+		Telemetry.LastGCSeconds,
+		*FormatTraceBytesDelta(UsedDelta),
+		*FormatTraceBytesDelta(AvailableDelta),
+		PendingUnloadTilePackageNames.Num()));
+}
+
+void UMinimapGeneratorManager::RetryUnloadPendingTilePackages()
+{
+	if (PendingUnloadTilePackageNames.Num() == 0)
+	{
+		TracePanoramicMemory(TEXT("TILE_PACKAGE_RETRY_SKIP"), TEXT("No pending unload packages"));
+		return;
+	}
+
+	UpdateTelemetryPhase(TEXT("Unloading Tile Packages"));
+	TracePanoramicMemory(TEXT("TILE_PACKAGE_RETRY_BEGIN"), FString::Printf(TEXT("Pending=%d"), PendingUnloadTilePackageNames.Num()));
+	TArray<FString> StillLoadedPackageNames;
+	for (const FString& PackageName : PendingUnloadTilePackageNames)
+	{
+		UPackage* Package = FindPackage(nullptr, *PackageName);
+		if (!Package)
+		{
+			continue;
+		}
+
+		Package->SetDirtyFlag(false);
+		FText UnloadErrorMessage;
+		const bool bUnloaded = UPackageTools::UnloadPackages({Package}, UnloadErrorMessage, true);
+		if (!bUnloaded)
+		{
+			StillLoadedPackageNames.Add(PackageName);
+			if (IsPanoramicMemoryTraceEnabled())
+			{
+				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANOMEM][TILE_PACKAGE_RETRY_STILL_LOADED] Package=%s Error=%s"),
+					*PackageName,
+					*UnloadErrorMessage.ToString());
+			}
+		}
+		else
+		{
+			TracePanoramicMemory(TEXT("TILE_PACKAGE_RETRY_UNLOADED"), FString::Printf(TEXT("Package=%s"), *PackageName));
+		}
+	}
+
+	PendingUnloadTilePackageNames = MoveTemp(StillLoadedPackageNames);
+	TracePanoramicMemory(TEXT("TILE_PACKAGE_RETRY_END"), FString::Printf(TEXT("Remaining=%d"), PendingUnloadTilePackageNames.Num()));
+}
+
+void UMinimapGeneratorManager::ReleaseWorkingMemory(const bool bFinalCleanup)
+{
+	TracePanoramicMemory(TEXT("WORKING_MEMORY_RELEASE_BEGIN"), FString::Printf(TEXT("FinalCleanup=%s"), bFinalCleanup ? TEXT("true") : TEXT("false")));
+	UpdateTelemetryPhase(TEXT("Memory Cleanup"));
+	ReleaseCaptureResources(bFinalCleanup);
+	TracePanoramicMemory(TEXT("CONTAINER_CLEAR_TILESET_BEGIN"), FString::Printf(TEXT("Levels=%d"), TileSetExportLevels.Num()));
+	TileSetExportLevels.Empty();
+	TileSetExportLevels.Shrink();
+	TracePanoramicMemory(TEXT("CONTAINER_CLEAR_LEGACY_BEGIN"), FString::Printf(TEXT("LegacyTiles=%d"), LegacyCapturedTiles.Num()));
+	LegacyCapturedTiles.Empty();
+	LegacyCapturedTiles.Shrink();
+	TracePanoramicMemory(TEXT("BUFFER_CLEAR_STAGING_WORKING_BEGIN"), FString::Printf(TEXT("StagingPixels=%d"), StagingPixelBuffer.Num()));
+	StagingPixelBuffer.Empty();
+	StagingPixelBuffer.Shrink();
+	CleanupLegacyTileTempFiles();
+	RetryUnloadPendingTilePackages();
+	TracePanoramicMemory(TEXT("WORKING_MEMORY_AFTER_CLEAR"), FString::Printf(TEXT("FinalCleanup=%s"), bFinalCleanup ? TEXT("true") : TEXT("false")));
+
+	if (bFinalCleanup)
+	{
+		TracePanoramicMemory(TEXT("GC_BEGIN"), TEXT("CollectGarbage(RF_NoFlags)"));
+		const double GCStartTime = FPlatformTime::Seconds();
+		CollectGarbage(RF_NoFlags);
+		Telemetry.LastGCSeconds = FPlatformTime::Seconds() - GCStartTime;
+		TracePanoramicMemory(TEXT("GC_END"), FString::Printf(TEXT("Duration=%.3fs"), Telemetry.LastGCSeconds));
+		RetryUnloadPendingTilePackages();
+		if (PendingUnloadTilePackageNames.Num() > 0)
+		{
+			if (IsPanoramicMemoryTraceEnabled())
+			{
+				UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[PANOMEM][PENDING_UNLOAD_REMAINING] Count=%d"), PendingUnloadTilePackageNames.Num());
+			}
+		}
+		UpdateTelemetryPhase(TEXT("Cleanup Done"));
+		ResetMemoryCleanupPolicy();
+	}
+	TracePanoramicMemory(TEXT("WORKING_MEMORY_RELEASE_END"), FString::Printf(TEXT("FinalCleanup=%s"), bFinalCleanup ? TEXT("true") : TEXT("false")));
 }
 
 UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget()
 {
+	TracePanoramicMemory(TEXT("RENDER_TARGET_CREATE_BEGIN"), FString::Printf(TEXT("UseTiling=%s ExportTileSet=%s CurrentLOD=%d"),
+		Settings.bUseTiling ? TEXT("true") : TEXT("false"),
+		Settings.bExportTileSet ? TEXT("true") : TEXT("false"),
+		CurrentTileLOD));
 	const int32 TileSetResolution = (Settings.bExportTileSet && CurrentTileLOD == 0)
 		                                ? Settings.TileSetOverviewResolution
 		                                : Settings.TileResolution;
@@ -756,11 +1107,19 @@ UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget()
 	RenderTarget->InitCustomFormat(TargetWidth, TargetHeight, PF_B8G8R8A8, true);
 
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Created Render Target (%dx%d)."), TargetWidth, TargetHeight);
+	TracePanoramicMemory(TEXT("RENDER_TARGET_CREATE_END"), FString::Printf(TEXT("RenderTarget=%s@%p Size=%dx%d Format=PF_B8G8R8A8"),
+		*RenderTarget->GetName(),
+		RenderTarget,
+		TargetWidth,
+		TargetHeight));
 	return RenderTarget;
 }
 
 ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget)
 {
+	TracePanoramicMemory(TEXT("CAPTURE_ACTOR_CREATE_BEGIN"), FString::Printf(TEXT("RenderTarget=%s@%p"),
+		RenderTarget ? *RenderTarget->GetName() : TEXT("null"),
+		RenderTarget));
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World || !RenderTarget) return nullptr;
 
@@ -838,6 +1197,12 @@ ASceneCapture2D* UMinimapGeneratorManager::SpawnAndConfigureCaptureActor(UTextur
 
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("%hs: SceneCapture2D fully configured. CaptureSource=%d, ShowOnlyActors=%d"),
 		__FUNCTION__, static_cast<int32>(CaptureComponent->CaptureSource), CaptureComponent->ShowOnlyActors.Num());
+	TracePanoramicMemory(TEXT("CAPTURE_ACTOR_CREATE_END"), FString::Printf(TEXT("Actor=%s@%p RenderTarget=%s@%p ShowOnly=%d"),
+		*CaptureActor->GetName(),
+		CaptureActor,
+		*RenderTarget->GetName(),
+		RenderTarget,
+		CaptureComponent->ShowOnlyActors.Num()));
 	return CaptureActor;
 }
 
@@ -1077,14 +1442,19 @@ FString UMinimapGeneratorManager::NormalizePackagePath(const FString& InPackageP
 void UMinimapGeneratorManager::StartTileSetCaptureProcess()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting direct tile-set capture process."));
+	TracePanoramicMemory(TEXT("TILESET_START_BEGIN"), FString::Printf(TEXT("MaxLOD=%d WorldTileSize=%.2f OverviewRes=%d TileRes=%d"),
+		Settings.TileSetMaxLOD,
+		Settings.TileSetWorldTileSize,
+		Settings.TileSetOverviewResolution,
+		Settings.TileResolution));
 
 	CurrentTileIndex = 0;
 	CurrentTileLOD = 0;
-	CapturedTileData.Empty();
+	LegacyCapturedTiles.Empty();
 	TileSetExportLevels.Empty();
 	ActiveCaptureActor.Reset();
 	ActiveRenderTarget.Reset();
-	TileSetTilesSinceGarbageCollect = 0;
+	ResetMemoryCleanupPolicy();
 
 	InitializeTileSetExportLevels();
 	Telemetry.TotalTiles = GetTileSetTotalTileCount();
@@ -1099,6 +1469,9 @@ void UMinimapGeneratorManager::StartTileSetCaptureProcess()
 	CurrentTileSetGrid = TileSetExportLevels[0].GridDimensions;
 	ActiveRenderTarget = CreateRenderTarget();
 	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
+	TracePanoramicMemory(TEXT("TILESET_START_AFTER_RESOURCES"), FString::Printf(TEXT("TotalTiles=%d Levels=%d"),
+		GetTileSetTotalTileCount(),
+		TileSetExportLevels.Num()));
 
 	if (!ActiveCaptureActor.IsValid() || !ActiveRenderTarget.IsValid())
 	{
@@ -1137,26 +1510,23 @@ void UMinimapGeneratorManager::InitializeTileSetExportLevels()
 
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Initialized tile-set pyramid: FullGrid=%dx%d, LODs=%d"),
 		FullTilesX, FullTilesY, TileSetExportLevels.Num());
+	TracePanoramicMemory(TEXT("TILESET_LEVELS_INITIALIZED"), FString::Printf(TEXT("FullGrid=%dx%d LODs=%d TotalTiles=%d"),
+		FullTilesX,
+		FullTilesY,
+		TileSetExportLevels.Num(),
+		GetTileSetTotalTileCount()));
 }
 
 bool UMinimapGeneratorManager::AdvanceToNextTileSetLevel()
 {
-	if (ActiveCaptureActor.IsValid())
-	{
-		ActiveCaptureActor->Destroy();
-	}
-	ActiveCaptureActor.Reset();
-
-	if (ActiveRenderTarget.IsValid())
-	{
-		ActiveRenderTarget->ConditionalBeginDestroy();
-	}
-	ActiveRenderTarget.Reset();
+	TracePanoramicMemory(TEXT("TILESET_LOD_ADVANCE_BEGIN"), FString::Printf(TEXT("CurrentLOD=%d"), CurrentTileLOD));
+	ReleaseCaptureResources(true);
 
 	CurrentTileLOD++;
 	CurrentTileIndex = 0;
 	if (!TileSetExportLevels.IsValidIndex(CurrentTileLOD))
 	{
+		TracePanoramicMemory(TEXT("TILESET_LOD_ADVANCE_END"), FString::Printf(TEXT("NoMoreLOD CurrentLOD=%d"), CurrentTileLOD));
 		return false;
 	}
 
@@ -1164,6 +1534,11 @@ bool UMinimapGeneratorManager::AdvanceToNextTileSetLevel()
 	ActiveRenderTarget = CreateRenderTarget();
 	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
 
+	TracePanoramicMemory(TEXT("TILESET_LOD_ADVANCE_END"), FString::Printf(TEXT("NewLOD=%d Grid=%dx%d Valid=%s"),
+		CurrentTileLOD,
+		CurrentTileSetGrid.X,
+		CurrentTileSetGrid.Y,
+		(ActiveCaptureActor.IsValid() && ActiveRenderTarget.IsValid()) ? TEXT("true") : TEXT("false")));
 	return ActiveCaptureActor.IsValid() && ActiveRenderTarget.IsValid();
 }
 
@@ -1245,6 +1620,14 @@ void UMinimapGeneratorManager::CaptureNextTileSetTile()
 
 	const int32 CompletedTiles = CompletedBeforeLevel + CurrentTileIndex;
 	BeginTelemetryTile(CompletedTiles + 1, TotalTiles, CurrentTileLOD);
+	TracePanoramicMemory(TEXT("TILESET_TILE_CAPTURE_BEGIN"), FString::Printf(TEXT("GlobalTile=%d/%d LOD=%d Tile=%d/%d Coord=%d,%d"),
+		CompletedTiles + 1,
+		TotalTiles,
+		CurrentTileLOD,
+		CurrentTileIndex + 1,
+		TilesInLevel,
+		TileX,
+		TileY));
 
 	ActiveCaptureActor->SetActorLocation(FVector(TileCenter.X, TileCenter.Y, Settings.CameraHeight));
 	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D();
@@ -1275,6 +1658,7 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 	{
 		return;
 	}
+	TracePanoramicMemory(TEXT("TILESET_TILE_READBACK_BEGIN"), FString::Printf(TEXT("LOD=%d TileIndex=%d"), CurrentTileLOD, CurrentTileIndex));
 
 	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
 	if (!RenderTarget || !TileSetExportLevels.IsValidIndex(CurrentTileLOD))
@@ -1295,6 +1679,13 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 		TileWidth = RTResource->GetSizeX();
 		TileHeight = RTResource->GetSizeY();
 		BroadcastTelemetry();
+		TracePanoramicMemory(TEXT("TILESET_TILE_READBACK_END"), FString::Printf(TEXT("LOD=%d TileIndex=%d Pixels=%d Size=%dx%d Readback=%.3fs"),
+			CurrentTileLOD,
+			CurrentTileIndex,
+			TilePixels.Num(),
+			TileWidth,
+			TileHeight,
+			Telemetry.LastReadbackSeconds));
 	}
 
 	if (TilePixels.Num() > 0)
@@ -1309,10 +1700,22 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 
 		UpdateTelemetryPhase(TEXT("Importing Tile"));
 		const double ImportStartTime = FPlatformTime::Seconds();
+		TracePanoramicMemory(TEXT("TILESET_TILE_IMPORT_BEGIN"), FString::Printf(TEXT("LOD=%d X=%d Y=%d Asset=%s Pixels=%d"),
+			CurrentTileLOD,
+			TileX,
+			TileY,
+			*TextureAssetName,
+			TilePixels.Num()));
 		const TSoftObjectPtr<UTexture2D> TileTexture = ImportTileTextureAssetFromPixels(
 			TilePixels, TileWidth, TileHeight, TexturePackagePath, TextureAssetName);
 		Telemetry.LastImportSeconds = FPlatformTime::Seconds() - ImportStartTime;
 		BroadcastTelemetry();
+		TracePanoramicMemory(TEXT("TILESET_TILE_IMPORT_END"), FString::Printf(TEXT("LOD=%d X=%d Y=%d Asset=%s Import=%.3fs"),
+			CurrentTileLOD,
+			TileX,
+			TileY,
+			*TextureAssetName,
+			Telemetry.LastImportSeconds));
 
 		const FBox TileWorldBounds = GetTileSetTileWorldBounds(CurrentTileLOD, TileX, TileY);
 		const FVector BoundsSize = Settings.CaptureBounds.GetSize();
@@ -1335,16 +1738,13 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 		Level.Tiles.Add(TileRef);
 
 		TilePixels.Empty();
-		TileSetTilesSinceGarbageCollect++;
-		if (TileSetTilesSinceGarbageCollect >= TileSetGarbageCollectBatchSize)
-		{
-			TileSetTilesSinceGarbageCollect = 0;
-			UpdateTelemetryPhase(TEXT("Garbage Collection"));
-			const double GCStartTime = FPlatformTime::Seconds();
-			CollectGarbage(RF_NoFlags);
-			Telemetry.LastGCSeconds = FPlatformTime::Seconds() - GCStartTime;
-			BroadcastTelemetry();
-		}
+		TilePixels.Shrink();
+		TracePanoramicMemory(TEXT("TILESET_TILE_BUFFER_RELEASED"), FString::Printf(TEXT("LOD=%d X=%d Y=%d LevelTiles=%d"),
+			CurrentTileLOD,
+			TileX,
+			TileY,
+			Level.Tiles.Num()));
+		MaybeRunTileSetMemoryMaintenance(TEXT("PostTile"));
 	}
 	else
 	{
@@ -1353,20 +1753,30 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 	}
 
 	CompleteTelemetryTile();
+	TracePanoramicMemory(TEXT("TILESET_TILE_COMPLETE"), FString::Printf(TEXT("LOD=%d CompletedTileIndex=%d LastTile=%.3fs AvgTile=%.3fs"),
+		CurrentTileLOD,
+		CurrentTileIndex,
+		Telemetry.LastTileSeconds,
+		Telemetry.AverageTileSeconds));
 	CurrentTileIndex++;
 	CaptureNextTileSetTile();
 }
 
 void UMinimapGeneratorManager::FinalizeTileSetExport()
 {
+	TracePanoramicMemory(TEXT("TILESET_FINALIZE_BEGIN"), FString::Printf(TEXT("Levels=%d TotalTiles=%d PendingUnload=%d"),
+		TileSetExportLevels.Num(),
+		GetTileSetTotalTileCount(),
+		PendingUnloadTilePackageNames.Num()));
 	UpdateTelemetryPhase(TEXT("Saving TileSet Metadata"));
-	CleanupCaptureResources();
+	ReleaseCaptureResources(true);
 	OnProgress.Broadcast(FText::FromString(TEXT("Saving tile-set metadata...")), 0.98f, 0, 0);
 
 	UMinimapTileSetDataAsset* TileSetAsset = CreateOrUpdateTileSetAsset();
 	if (!TileSetAsset)
 	{
 		OnCaptureComplete.Broadcast(false, TEXT("Failed to create tile-set asset."));
+		ReleaseWorkingMemory(true);
 		return;
 	}
 
@@ -1387,25 +1797,45 @@ void UMinimapGeneratorManager::FinalizeTileSetExport()
 		GEditor->SyncBrowserToObjects(AssetsToSync);
 	}
 
+	const FString TileSetAssetPath = TileSetAsset->GetPathName();
+	const FString DefinitionAssetPath = DefinitionAsset ? DefinitionAsset->GetPathName() : TEXT("");
 	OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
 	Telemetry.CurrentPhase = TEXT("Done");
 	Telemetry.bIsCapturing = false;
 	BroadcastTelemetry();
-	OnCaptureComplete.Broadcast(true, TileSetAsset->GetPathName());
-	TileSetExportLevels.Empty();
-	const double GCStartTime = FPlatformTime::Seconds();
-	CollectGarbage(RF_NoFlags);
-	Telemetry.LastGCSeconds = FPlatformTime::Seconds() - GCStartTime;
-	BroadcastTelemetry();
+	OnCaptureComplete.Broadcast(true, TileSetAssetPath);
+	if (IsPanoramicMemoryTraceEnabled())
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANOMEM][OS_FILE_CACHE_NOTE] AvailablePhysical may remain lower after exporting many tile packages because the OS can keep recently written .uasset files in filesystem cache. Use UsedPhysical/GC traces to distinguish Unreal object retention from OS cache."));
+	}
+	ReleaseWorkingMemory(true);
+	TracePanoramicMemory(TEXT("TILESET_FINALIZE_END"), FString::Printf(TEXT("TileSetAsset=%s DefinitionAsset=%s"), *TileSetAssetPath, *DefinitionAssetPath));
 }
 
 void UMinimapGeneratorManager::StartTiledCaptureProcess()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting tiled capture process."));
+	TracePanoramicMemory(TEXT("FULLRES_TILED_START_BEGIN"), FString::Printf(TEXT("Output=%dx%d TileRes=%d Overlap=%d"),
+		Settings.OutputWidth,
+		Settings.OutputHeight,
+		Settings.TileResolution,
+		Settings.TileOverlap));
 	CurrentTileIndex = 0;
-	CapturedTileData.Empty();
+	LegacyCapturedTiles.Empty();
 	ActiveCaptureActor.Reset();
 	ActiveRenderTarget.Reset();
+	CaptureSessionId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	LegacyTileTempDirectory = FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("PanoramicMinimapTemp"),
+		CaptureSessionId);
+	if (!IFileManager::Get().MakeDirectory(*LegacyTileTempDirectory, true))
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Failed to create legacy tile temp directory."));
+		ReleaseWorkingMemory(true);
+		return;
+	}
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_DIR_CREATED"), FString::Printf(TEXT("TempDir=%s"), *LegacyTileTempDirectory));
 
 	CalculateGrid();
 	Telemetry.TotalTiles = NumTilesX * NumTilesY;
@@ -1419,6 +1849,10 @@ void UMinimapGeneratorManager::StartTiledCaptureProcess()
 
 	ActiveRenderTarget = CreateRenderTarget();
 	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
+	TracePanoramicMemory(TEXT("FULLRES_TILED_AFTER_RESOURCES"), FString::Printf(TEXT("Grid=%dx%d TotalTiles=%d"),
+		NumTilesX,
+		NumTilesY,
+		NumTilesX * NumTilesY));
 
 	if (!ActiveCaptureActor.IsValid() || !ActiveRenderTarget.IsValid())
 	{
@@ -1504,6 +1938,11 @@ void UMinimapGeneratorManager::CaptureNextTile()
 	CaptureComponent->OrthoWidth = TileOrthoSize;
 
 	BeginTelemetryTile(CurrentTileIndex + 1, NumTilesX * NumTilesY, INDEX_NONE);
+	TracePanoramicMemory(TEXT("FULLRES_TILE_CAPTURE_BEGIN"), FString::Printf(TEXT("Tile=%d/%d Coord=%d,%d"),
+		CurrentTileIndex + 1,
+		NumTilesX * NumTilesY,
+		TileX,
+		TileY));
 	CaptureComponent->CaptureScene();
 
 	const float CurrentProgress = static_cast<float>(CurrentTileIndex) / (NumTilesX * NumTilesY);
@@ -1530,6 +1969,7 @@ void UMinimapGeneratorManager::CaptureNextTile()
 void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 {
 	if (bCancelRequested) return;
+	TracePanoramicMemory(TEXT("FULLRES_TILE_READBACK_BEGIN"), FString::Printf(TEXT("TileIndex=%d"), CurrentTileIndex));
 
 	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
 	if (!RenderTarget)
@@ -1546,6 +1986,10 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 		RTResource->ReadPixels(TilePixels);
 		Telemetry.LastReadbackSeconds = FPlatformTime::Seconds() - ReadbackStartTime;
 		BroadcastTelemetry();
+		TracePanoramicMemory(TEXT("FULLRES_TILE_READBACK_END"), FString::Printf(TEXT("TileIndex=%d Pixels=%d Readback=%.3fs"),
+			CurrentTileIndex,
+			TilePixels.Num(),
+			Telemetry.LastReadbackSeconds));
 	}
 
 	if (TilePixels.Num() > 0)
@@ -1566,8 +2010,22 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 			SaveDebugTileImage(Settings.OutputPath, BaseFileName, TilePixels, TileX, TileY, Settings.TileResolution);
 		}
 
-		CapturedTileData.Add(FIntPoint(TileX, TileY), MoveTemp(TilePixels));
-		UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Tile (%d, %d) captured and stored."), TileX, TileY);
+		if (!WriteLegacyTileToTempFile(TilePixels, TileX, TileY, Settings.TileResolution, Settings.TileResolution))
+		{
+			TilePixels.Empty();
+			TilePixels.Shrink();
+			OnCaptureComplete.Broadcast(false, TEXT("Failed to write legacy tile cache."));
+			ReleaseWorkingMemory(true);
+			return;
+		}
+		TilePixels.Empty();
+		TilePixels.Shrink();
+		TracePanoramicMemory(TEXT("FULLRES_TILE_BUFFER_RELEASED"), FString::Printf(TEXT("Tile=%d Coord=%d,%d CachedTiles=%d"),
+			CurrentTileIndex + 1,
+			TileX,
+			TileY,
+			LegacyCapturedTiles.Num()));
+		UE_LOG(OBPanoramicMinimapGenerator, Verbose, TEXT("Tile (%d, %d) captured and cached to disk."), TileX, TileY);
 	}
 	else
 	{
@@ -1575,36 +2033,127 @@ void UMinimapGeneratorManager::OnTileRenderedAndContinue()
 	}
 
 	CompleteTelemetryTile();
+	TracePanoramicMemory(TEXT("FULLRES_TILE_COMPLETE"), FString::Printf(TEXT("TileIndex=%d LastTile=%.3fs AvgTile=%.3fs"),
+		CurrentTileIndex,
+		Telemetry.LastTileSeconds,
+		Telemetry.AverageTileSeconds));
 	CurrentTileIndex++;
 	CaptureNextTile();
+}
+
+bool UMinimapGeneratorManager::WriteLegacyTileToTempFile(const TArray<FColor>& PixelData,
+                                                         const int32 TileX,
+                                                         const int32 TileY,
+                                                         const int32 Width,
+                                                         const int32 Height)
+{
+	if (PixelData.Num() != Width * Height || LegacyTileTempDirectory.IsEmpty())
+	{
+		return false;
+	}
+
+	IFileManager::Get().MakeDirectory(*LegacyTileTempDirectory, true);
+	const FString RawTilePath = FPaths::Combine(
+		LegacyTileTempDirectory,
+		FString::Printf(TEXT("Tile_X%d_Y%d_%dx%d.bgra"), TileX, TileY, Width, Height));
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_WRITE_BEGIN"), FString::Printf(TEXT("Path=%s Pixels=%d Bytes=%lld"),
+		*RawTilePath,
+		PixelData.Num(),
+		static_cast<int64>(PixelData.Num()) * sizeof(FColor)));
+
+	const TArrayView64<const uint8> RawBytes(
+		reinterpret_cast<const uint8*>(PixelData.GetData()),
+		static_cast<int64>(PixelData.Num()) * sizeof(FColor));
+	if (!FFileHelper::SaveArrayToFile(RawBytes, *RawTilePath))
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to write legacy tile cache: %s"), *RawTilePath);
+		return false;
+	}
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_WRITE_END"), FString::Printf(TEXT("Path=%s"), *RawTilePath));
+
+	FLegacyCapturedTileRef TileRef;
+	TileRef.Coord = FIntPoint(TileX, TileY);
+	TileRef.RawTilePath = RawTilePath;
+	TileRef.Width = Width;
+	TileRef.Height = Height;
+	LegacyCapturedTiles.Add(TileRef);
+	return true;
+}
+
+bool UMinimapGeneratorManager::LoadLegacyTileFromTempFile(const FLegacyCapturedTileRef& TileRef, TArray<FColor>& OutPixels) const
+{
+	OutPixels.Empty();
+	if (TileRef.Width <= 0 || TileRef.Height <= 0 || TileRef.RawTilePath.IsEmpty())
+	{
+		return false;
+	}
+
+	TArray<uint8> RawBytes;
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_LOAD_BEGIN"), FString::Printf(TEXT("Path=%s"), *TileRef.RawTilePath));
+	if (!FFileHelper::LoadFileToArray(RawBytes, *TileRef.RawTilePath))
+	{
+		return false;
+	}
+
+	const int64 ExpectedBytes = static_cast<int64>(TileRef.Width) * TileRef.Height * sizeof(FColor);
+	if (RawBytes.Num() != ExpectedBytes)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Legacy tile cache size mismatch: %s expected %lld bytes, got %d."),
+			*TileRef.RawTilePath,
+			ExpectedBytes,
+			RawBytes.Num());
+		return false;
+	}
+
+	OutPixels.SetNumUninitialized(TileRef.Width * TileRef.Height);
+	FMemory::Memcpy(OutPixels.GetData(), RawBytes.GetData(), RawBytes.Num());
+	RawBytes.Empty();
+	RawBytes.Shrink();
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_LOAD_END"), FString::Printf(TEXT("Path=%s Pixels=%d"),
+		*TileRef.RawTilePath,
+		OutPixels.Num()));
+	return true;
+}
+
+void UMinimapGeneratorManager::CleanupLegacyTileTempFiles()
+{
+	if (LegacyTileTempDirectory.IsEmpty())
+	{
+		TracePanoramicMemory(TEXT("FULLRES_TEMP_DELETE_SKIP"), TEXT("Temp directory empty"));
+		return;
+	}
+
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_DELETE_BEGIN"), FString::Printf(TEXT("TempDir=%s"), *LegacyTileTempDirectory));
+	IFileManager::Get().DeleteDirectory(*LegacyTileTempDirectory, false, true);
+	LegacyTileTempDirectory.Reset();
+	TracePanoramicMemory(TEXT("FULLRES_TEMP_DELETE_END"), TEXT("Temp directory reset"));
 }
 
 void UMinimapGeneratorManager::StartStitching()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("All tiles captured. Starting stitching process..."));
+	TracePanoramicMemory(TEXT("FULLRES_STITCH_BEGIN"), FString::Printf(TEXT("CachedTiles=%d Output=%dx%d"),
+		LegacyCapturedTiles.Num(),
+		Settings.OutputWidth,
+		Settings.OutputHeight));
 	UpdateTelemetryPhase(TEXT("Stitching"));
 	OnProgress.Broadcast(FText::FromString(TEXT("Stitching tiles...")), 0.9f, 0, 0);
 
-	if (ActiveCaptureActor.IsValid())
-	{
-		ActiveCaptureActor->Destroy();
-	}
-	ActiveCaptureActor.Reset();
-	if (ActiveRenderTarget.IsValid())
-	{
-		ActiveRenderTarget->ConditionalBeginDestroy();
-	}
-	ActiveRenderTarget.Reset();
+	ReleaseCaptureResources(true);
 
-	if (CapturedTileData.Num() == 0)
+	if (LegacyCapturedTiles.Num() == 0)
 	{
 		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("No tile data was captured. Aborting stitching."));
 		OnCaptureComplete.Broadcast(false, TEXT("No tile data was captured."));
+		ReleaseWorkingMemory(true);
 		return;
 	}
 
 	TArray<FColor> FinalImageData;
 	FinalImageData.AddUninitialized(Settings.OutputWidth * Settings.OutputHeight);
+	TracePanoramicMemory(TEXT("FULLRES_FINAL_BUFFER_ALLOCATED"), FString::Printf(TEXT("Pixels=%d Bytes=%lld"),
+		FinalImageData.Num(),
+		static_cast<int64>(FinalImageData.Num()) * sizeof(FColor)));
 	// Initialize final image with the configured background color for correct blending.
 	const FColor BackgroundColor = (Settings.BackgroundMode == EMinimapBackgroundMode::Transparent)
 		                               ? FColor::Transparent
@@ -1619,31 +2168,37 @@ void UMinimapGeneratorManager::StartStitching()
 	const bool bIsPortrait = Settings.OutputHeight > Settings.OutputWidth;
 
 	// Sort tiles from left-to-right and top-to-bottom for deterministic blending.
-	TArray<FIntPoint> SortedTileCoords;
-	CapturedTileData.GetKeys(SortedTileCoords);
-	SortedTileCoords.Sort([](const FIntPoint& A, const FIntPoint& B)
+	LegacyCapturedTiles.Sort([](const FLegacyCapturedTileRef& A, const FLegacyCapturedTileRef& B)
 	{
-		if (A.Y != B.Y) return A.Y < B.Y;
-		return A.X < B.X;
+		if (A.Coord.Y != B.Coord.Y) return A.Coord.Y < B.Coord.Y;
+		return A.Coord.X < B.Coord.X;
 	});
 
-	for (const FIntPoint& TileCoord : SortedTileCoords)
+	for (const FLegacyCapturedTileRef& TileRef : LegacyCapturedTiles)
 	{
-		const TArray<FColor>& TilePixels = CapturedTileData[TileCoord];
-		const int32 CanvasStartX = TileCoord.X * EffectiveTileRes;
-		const int32 CanvasStartY = TileCoord.Y * EffectiveTileRes;
-
-		for (int32 y = 0; y < Settings.TileResolution; ++y)
+		TArray<FColor> TilePixels;
+		if (!LoadLegacyTileFromTempFile(TileRef, TilePixels))
 		{
-			for (int32 x = 0; x < Settings.TileResolution; ++x)
+			UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to load cached tile for stitching: %s"), *TileRef.RawTilePath);
+			OnCaptureComplete.Broadcast(false, TEXT("Failed to load cached tile for stitching."));
+			ReleaseWorkingMemory(true);
+			return;
+		}
+
+		const int32 CanvasStartX = TileRef.Coord.X * EffectiveTileRes;
+		const int32 CanvasStartY = TileRef.Coord.Y * EffectiveTileRes;
+
+		for (int32 y = 0; y < TileRef.Height; ++y)
+		{
+			for (int32 x = 0; x < TileRef.Width; ++x)
 			{
-				const int32 SrcIndex = y * Settings.TileResolution + x;
+				const int32 SrcIndex = y * TileRef.Width + x;
 				const FColor& SrcPixelColor = TilePixels[SrcIndex];
 
 				int32 DstX_on_Canvas, DstY_on_Canvas;
 				if (bIsPortrait)
 				{
-					DstX_on_Canvas = CanvasStartX + (Settings.TileResolution - 1 - y);
+					DstX_on_Canvas = CanvasStartX + (TileRef.Width - 1 - y);
 					DstY_on_Canvas = CanvasStartY + x;
 				}
 				else
@@ -1662,13 +2217,13 @@ void UMinimapGeneratorManager::StartStitching()
 					float BlendAlphaY = 1.0f;
 
 					// Calculate blend factor for X axis overlap.
-					if (TileCoord.X > 0 && x < Settings.TileOverlap)
+					if (TileRef.Coord.X > 0 && x < Settings.TileOverlap)
 					{
 						BlendAlphaX = static_cast<float>(x) / FMath::Max(1, Settings.TileOverlap - 1);
 					}
 
 					// Calculate blend factor for Y axis overlap.
-					if (TileCoord.Y > 0 && y < Settings.TileOverlap)
+					if (TileRef.Coord.Y > 0 && y < Settings.TileOverlap)
 					{
 						BlendAlphaY = static_cast<float>(y) / FMath::Max(1, Settings.TileOverlap - 1);
 					}
@@ -1699,9 +2254,20 @@ void UMinimapGeneratorManager::StartStitching()
 				}
 			}
 		}
+
+		TilePixels.Empty();
+		TilePixels.Shrink();
+		IFileManager::Get().Delete(*TileRef.RawTilePath, false, true);
+		TracePanoramicMemory(TEXT("FULLRES_STITCH_TILE_RELEASED"), FString::Printf(TEXT("Coord=%d,%d Path=%s"),
+			TileRef.Coord.X,
+			TileRef.Coord.Y,
+			*TileRef.RawTilePath));
 	}
 
-	CapturedTileData.Empty();
+	LegacyCapturedTiles.Empty();
+	LegacyCapturedTiles.Shrink();
+	CleanupLegacyTileTempFiles();
+	TracePanoramicMemory(TEXT("FULLRES_STITCH_END"), FString::Printf(TEXT("FinalPixels=%d"), FinalImageData.Num()));
 	OnProgress.Broadcast(FText::FromString(TEXT("Saving final image...")), 0.95f, 0, 0);
 	StartImageSaveTask(MoveTemp(FinalImageData), Settings.OutputWidth, Settings.OutputHeight);
 }
