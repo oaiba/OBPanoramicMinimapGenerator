@@ -85,6 +85,7 @@ protected:
 namespace
 {
 constexpr int64 MaxLegacyStitchedPixels = 8192LL * 8192LL;
+constexpr int64 MaxImmediateTextureResourcePixels = 4096LL * 4096LL;
 constexpr int32 TileSetGarbageCollectBatchSize = 12;
 
 FString MakeSafeAssetName(const FString& InName)
@@ -418,9 +419,14 @@ UTexture2D* UMinimapGeneratorManager::ImportTextureAssetFromSavedImage(const FSt
 	NewTexture->Source.Init(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 1, 1, TSF_BGRA8, UncompressedBGRA.GetData());
 	NewTexture->SRGB = true;
 	NewTexture->CompressionSettings = TC_Default;
-	NewTexture->UpdateResource();
+	const int64 TexturePixels = static_cast<int64>(ImageWrapper->GetWidth()) * ImageWrapper->GetHeight();
+	if (TexturePixels <= MaxImmediateTextureResourcePixels)
+	{
+		NewTexture->UpdateResource();
+	}
 	NewTexture->MarkPackageDirty();
 	Package->MarkPackageDirty();
+	SaveAssetPackage(Package, NewTexture);
 
 	const double ImportDuration = FPlatformTime::Seconds() - ImportStartTime;
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Imported minimap texture asset: %s (%.2fs)"), *FullAssetPath, ImportDuration);

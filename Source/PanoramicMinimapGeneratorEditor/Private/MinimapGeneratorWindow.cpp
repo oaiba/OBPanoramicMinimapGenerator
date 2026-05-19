@@ -35,6 +35,11 @@
 
 #define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
 
+namespace
+{
+constexpr int64 MaxPreviewPixels = 4096LL * 4096LL;
+}
+
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 {
 	// --- INITIAL DATA SETUP ---
@@ -1112,6 +1117,18 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 		ImageInfoText->SetText(FText::Format(LOCTEXT("ImageInfo", "{0}x{1} • {2} • PNG"),
 			*CurrentOutputWidth, *CurrentOutputHeight, FText::FromString(FileSizeStr)));
 
+		const int64 PreviewPixels = static_cast<int64>(*CurrentOutputWidth) * *CurrentOutputHeight;
+		if (PreviewPixels > MaxPreviewPixels)
+		{
+			ReleasePreviewResources();
+			OpenFolderButton->SetVisibility(EVisibility::Visible);
+			ImageContainer->SetVisibility(EVisibility::Collapsed);
+			ImageInfoText->SetText(FText::Format(LOCTEXT("ImageInfoPreviewSkipped", "{0}x{1} • {2} • PNG • preview skipped"),
+				*CurrentOutputWidth, *CurrentOutputHeight, FText::FromString(FileSizeStr)));
+			CollectGarbage(RF_NoFlags);
+			return;
+		}
+
 		// Load and decompress the PNG on a background thread to avoid freezing the editor.
 		// A 4096x4096 PNG can take 2-5 seconds to decompress — doing this on the game thread
 		// would make the editor unresponsive.
@@ -1139,10 +1156,10 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 			ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, RawBGRA);
 			return RawBGRA;
 		})
-		.Then([WeakThis, ImagePath = FinalImagePath](TFuture<TArray<uint8>> Future)
+		.Then([WeakThis, ImagePath = FinalImagePath, PreviewWidth = *CurrentOutputWidth, PreviewHeight = *CurrentOutputHeight](TFuture<TArray<uint8>> Future)
 		{
 			// Dispatch texture creation back to game thread (UObject creation must happen there).
-			AsyncTask(ENamedThreads::GameThread, [WeakThis, ImagePath, RawData = Future.Get()]()
+			AsyncTask(ENamedThreads::GameThread, [WeakThis, ImagePath, PreviewWidth, PreviewHeight, RawData = Future.Get()]()
 			{
 				if (IsEngineExitRequested() || !FSlateApplication::IsInitialized())
 				{
@@ -1160,11 +1177,14 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 					return;
 				}
 
-				// Infer dimensions from raw data (BGRA = 4 bytes per pixel, assuming square).
-				const int32 PixelCount = RawData.Num() / 4;
-				const int32 Dim = FMath::RoundToInt(FMath::Sqrt(static_cast<float>(PixelCount)));
+				if (RawData.Num() != PreviewWidth * PreviewHeight * 4)
+				{
+					UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Preview image dimensions do not match decoded data: %s"), *ImagePath);
+					StrongThis->ImageContainer->SetVisibility(EVisibility::Collapsed);
+					return;
+				}
 
-				UTexture2D* LoadedTexture = UTexture2D::CreateTransient(Dim, Dim, PF_B8G8R8A8);
+				UTexture2D* LoadedTexture = UTexture2D::CreateTransient(PreviewWidth, PreviewHeight, PF_B8G8R8A8);
 				if (!LoadedTexture)
 				{
 					UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("Failed to create transient texture for preview."));
@@ -1416,6 +1436,12 @@ FReply SMinimapGeneratorWindow::OnCancelCaptureClicked()
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Start Capture button clicked."));
+	ReleasePreviewResources();
+	if (ImageContainer.IsValid())
+	{
+		ImageContainer->SetVisibility(EVisibility::Collapsed);
+	}
+	CollectGarbage(RF_NoFlags);
 
 	// Validation
 	const FVector MinBounds(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue());
