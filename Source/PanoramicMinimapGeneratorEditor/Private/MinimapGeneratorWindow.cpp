@@ -30,6 +30,7 @@
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Misc/MessageDialog.h"
+#include "HAL/PlatformMemory.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -38,6 +39,7 @@
 namespace
 {
 constexpr int64 MaxPreviewPixels = 4096LL * 4096LL;
+constexpr double MemoryStatsRefreshIntervalSeconds = 1.0;
 }
 
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
@@ -71,6 +73,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 	// Set default resolution to 4096 (2^12).
 	CurrentOutputWidth = ResolutionOptions[7];
 	CurrentOutputHeight = ResolutionOptions[7];
+	UpdateMemoryStatsCache();
 
 	// === NEW LAYOUT STRUCTURE START ===
 	ChildSlot
@@ -1016,13 +1019,27 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 5)
 			[
-				SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Hidden)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Hidden)
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(10, 0, 0, 0)
+				[
+					SAssignNew(MemoryStatsText, STextBlock)
+					.Text_Lambda([this] { return CachedMemoryStatsText; })
+					.ColorAndOpacity_Lambda([this] { return CachedMemoryStatsColor; })
+					.ToolTipText_Lambda([this] { return CachedMemoryStatsTooltip; })
+				]
 			]
 		]
 	];
 
 	// Load settings from config
 	LoadSettings();
+	RegisterActiveTimer(
+		MemoryStatsRefreshIntervalSeconds,
+		FWidgetActiveTimerDelegate::CreateSP(this, &SMinimapGeneratorWindow::RefreshMemoryStats));
 }
 
 SMinimapGeneratorWindow::~SMinimapGeneratorWindow()
@@ -1233,6 +1250,91 @@ void SMinimapGeneratorWindow::OnCaptureProgress(const FText& Status, float Perce
 	{
 		ProgressBar->SetPercent(Percentage);
 		StatusText->SetText(Status);
+	}
+}
+
+EActiveTimerReturnType SMinimapGeneratorWindow::RefreshMemoryStats(double CurrentTime, float DeltaTime)
+{
+	UpdateMemoryStatsCache();
+	return EActiveTimerReturnType::Continue;
+}
+
+void SMinimapGeneratorWindow::UpdateMemoryStatsCache()
+{
+	const FPlatformMemoryStats Stats = FPlatformMemory::GetStats();
+	const uint64 TotalPhysical = Stats.TotalPhysical;
+	const uint64 UsedPhysical = Stats.UsedPhysical;
+	const uint64 AvailablePhysical = Stats.AvailablePhysical;
+	const uint64 PeakUsedPhysical = Stats.PeakUsedPhysical;
+	const FPlatformMemoryStats::EMemoryPressureStatus PressureStatus = Stats.GetMemoryPressureStatus();
+
+	const FText TotalText = FormatMemoryBytes(TotalPhysical);
+	const FText FreeText = FormatMemoryBytes(AvailablePhysical);
+	const FText UsedText = FormatMemoryBytes(UsedPhysical);
+	const FText PeakText = FormatMemoryBytes(PeakUsedPhysical);
+	const FText PressureText = FormatMemoryPressureStatus(PressureStatus);
+
+	CachedMemoryStatsText = FText::FromString(FString::Printf(
+		TEXT("RAM Available: %s / %s"),
+		*FreeText.ToString(),
+		*TotalText.ToString()));
+
+	const double AvailableRatio = TotalPhysical > 0
+		                              ? static_cast<double>(AvailablePhysical) / static_cast<double>(TotalPhysical)
+		                              : 1.0;
+	const bool bCritical = PressureStatus == FPlatformMemoryStats::EMemoryPressureStatus::Critical
+		|| AvailableRatio < 0.10;
+	const bool bWarning = PressureStatus == FPlatformMemoryStats::EMemoryPressureStatus::Warning
+		|| AvailableRatio < 0.25;
+
+	if (bCritical)
+	{
+		CachedMemoryStatsColor = FSlateColor(FLinearColor(1.0f, 0.12f, 0.08f));
+	}
+	else if (bWarning)
+	{
+		CachedMemoryStatsColor = FSlateColor(FLinearColor(1.0f, 0.72f, 0.08f));
+	}
+	else
+	{
+		CachedMemoryStatsColor = FSlateColor::UseForeground();
+	}
+
+	CachedMemoryStatsTooltip = FText::FromString(FString::Printf(
+		TEXT("Used Physical: %s\nPeak Used Physical: %s\nAvailable Physical: %s\nTotal Physical: %s\nMemory Pressure: %s\nLast Update: %s"),
+		*UsedText.ToString(),
+		*PeakText.ToString(),
+		*FreeText.ToString(),
+		*TotalText.ToString(),
+		*PressureText.ToString(),
+		*FDateTime::Now().ToString(TEXT("%H:%M:%S"))));
+}
+
+FText SMinimapGeneratorWindow::FormatMemoryBytes(const uint64 Bytes) const
+{
+	constexpr double OneGB = 1024.0 * 1024.0 * 1024.0;
+	constexpr double OneMB = 1024.0 * 1024.0;
+	if (Bytes >= static_cast<uint64>(OneGB))
+	{
+		return FText::FromString(FString::Printf(TEXT("%.1f GB"), static_cast<double>(Bytes) / OneGB));
+	}
+
+	return FText::FromString(FString::Printf(TEXT("%.0f MB"), static_cast<double>(Bytes) / OneMB));
+}
+
+FText SMinimapGeneratorWindow::FormatMemoryPressureStatus(const FPlatformMemoryStats::EMemoryPressureStatus Status) const
+{
+	switch (Status)
+	{
+	case FPlatformMemoryStats::EMemoryPressureStatus::Nominal:
+		return LOCTEXT("MemoryPressureNormal", "Normal");
+	case FPlatformMemoryStats::EMemoryPressureStatus::Warning:
+		return LOCTEXT("MemoryPressureWarning", "Warning");
+	case FPlatformMemoryStats::EMemoryPressureStatus::Critical:
+		return LOCTEXT("MemoryPressureCritical", "Critical");
+	case FPlatformMemoryStats::EMemoryPressureStatus::Unknown:
+	default:
+		return LOCTEXT("MemoryPressureUnknown", "Unknown");
 	}
 }
 

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/PlatformMemory.h"
 #include "Widgets/SCompoundWidget.h"
 #include "MinimapGeneratorManager.h" // Include for UMinimapGeneratorManager and FMinimapCaptureSettings.
 #include "PropertyCustomizationHelpers.h"
@@ -43,6 +44,10 @@ private:
 	void OnCaptureProgress(const FText& Status, float Percentage, int32 CurrentTile, int32 TotalTiles);
 	void UnbindManagerDelegates();
 	void ReleasePreviewResources();
+	EActiveTimerReturnType RefreshMemoryStats(double CurrentTime, float DeltaTime);
+	void UpdateMemoryStatsCache();
+	FText FormatMemoryBytes(uint64 Bytes) const;
+	FText FormatMemoryPressureStatus(FPlatformMemoryStats::EMemoryPressureStatus Status) const;
 
 	// === BACKGROUND MODE STATE ===
 	/** Current background mode selected in UI. */
@@ -186,6 +191,10 @@ private:
 	// Progress Reporting
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;
+	TSharedPtr<STextBlock> MemoryStatsText;
+	FText CachedMemoryStatsText;
+	FSlateColor CachedMemoryStatsColor = FSlateColor::UseForeground();
+	FText CachedMemoryStatsTooltip;
 	TSharedPtr<SButton> StartButton;
 	TSharedPtr<SButton> CancelButton;
 
