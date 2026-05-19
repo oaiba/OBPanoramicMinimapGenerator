@@ -53,6 +53,10 @@ private:
 	FText FormatDurationSeconds(double Seconds) const;
 	FText FormatMilliseconds(double Seconds) const;
 	FText FormatIntPoint(FIntPoint Point) const;
+	ECheckBoxState IsPerformanceDetailsChecked() const;
+	void OnPerformanceDetailsChanged(ECheckBoxState NewState);
+	EVisibility GetPerformanceDetailsVisibility() const;
+	FText GetPerformanceDetailsToggleText() const;
 
 	// === BACKGROUND MODE STATE ===
 	/** Current background mode selected in UI. */
@@ -197,6 +201,7 @@ private:
 	TSharedPtr<SProgressBar> ProgressBar;
 	TSharedPtr<STextBlock> StatusText;
 	TSharedPtr<STextBlock> MemoryStatsText;
+	TSharedPtr<SCheckBox> PerformanceDetailsToggle;
 	TSharedPtr<STextBlock> TelemetrySummaryText;
 	TSharedPtr<STextBlock> TelemetryTimingText;
 	TSharedPtr<STextBlock> TelemetrySettingsText;
@@ -209,6 +214,7 @@ private:
 	FText CachedTelemetryTooltip;
 	FMinimapCaptureTelemetry LatestTelemetry;
 	double LatestTelemetryUpdateTime = 0.0;
+	bool bShowPerformanceDetails = false;
 	TSharedPtr<SButton> StartButton;
 	TSharedPtr<SButton> CancelButton;
 

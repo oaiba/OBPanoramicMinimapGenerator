@@ -1006,9 +1006,23 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Center)
 				[
-					SAssignNew(StartButton, SButton)
-					.Text(LOCTEXT("StartCaptureButton", "Start Capture Process"))
-					.OnClicked(this, &SMinimapGeneratorWindow::OnStartCaptureClicked)
+					SNew(SBox)
+					.WidthOverride(260.0f)
+					.HeightOverride(38.0f)
+					[
+						SAssignNew(StartButton, SButton)
+						.ButtonStyle(FAppStyle::Get(), "PrimaryButton")
+						.ContentPadding(FMargin(18.0f, 8.0f))
+						.HAlign(HAlign_Center)
+						.VAlign(VAlign_Center)
+						.OnClicked(this, &SMinimapGeneratorWindow::OnStartCaptureClicked)
+						[
+							SNew(STextBlock)
+							.Text(LOCTEXT("StartCaptureButton", "Capture Minimap"))
+							.Font(FAppStyle::GetFontStyle("BoldFont"))
+							.Justification(ETextJustify::Center)
+						]
+					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(5, 0, 0, 0)
 				[
@@ -1040,26 +1054,40 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0, 0, 12, 0)
 						[
 							SAssignNew(MemoryStatsText, STextBlock)
 							.Text_Lambda([this] { return CachedMemoryStatsText; })
 							.ColorAndOpacity_Lambda([this] { return CachedMemoryStatsColor; })
 							.ToolTipText_Lambda([this] { return CachedMemoryStatsTooltip; })
 						]
-						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 						[
-							SAssignNew(TelemetrySummaryText, STextBlock)
-							.Text_Lambda([this] { return CachedTelemetrySummaryText; })
-							.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
-							.AutoWrapText(true)
+							SAssignNew(PerformanceDetailsToggle, SCheckBox)
+							.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+							.IsChecked(this, &SMinimapGeneratorWindow::IsPerformanceDetailsChecked)
+							.OnCheckStateChanged(this, &SMinimapGeneratorWindow::OnPerformanceDetailsChanged)
+							.ToolTipText(LOCTEXT("PerformanceDetailsToggleTooltip", "Show or hide capture performance details"))
+							[
+								SNew(STextBlock)
+								.Text(this, &SMinimapGeneratorWindow::GetPerformanceDetailsToggleText)
+							]
 						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SAssignNew(TelemetrySummaryText, STextBlock)
+						.Text_Lambda([this] { return CachedTelemetrySummaryText; })
+						.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
+						.Visibility(this, &SMinimapGeneratorWindow::GetPerformanceDetailsVisibility)
+						.AutoWrapText(true)
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 					[
 						SAssignNew(TelemetryTimingText, STextBlock)
 						.Text_Lambda([this] { return CachedTelemetryTimingText; })
 						.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
+						.Visibility(this, &SMinimapGeneratorWindow::GetPerformanceDetailsVisibility)
 						.AutoWrapText(true)
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
@@ -1067,6 +1095,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 						SAssignNew(TelemetrySettingsText, STextBlock)
 						.Text_Lambda([this] { return CachedTelemetrySettingsText; })
 						.ToolTipText_Lambda([this] { return CachedTelemetryTooltip; })
+						.Visibility(this, &SMinimapGeneratorWindow::GetPerformanceDetailsVisibility)
 						.AutoWrapText(true)
 					]
 				]
@@ -1504,6 +1533,28 @@ FText SMinimapGeneratorWindow::FormatIntPoint(const FIntPoint Point) const
 	}
 
 	return FText::FromString(FString::Printf(TEXT("%dx%d"), Point.X, Point.Y));
+}
+
+ECheckBoxState SMinimapGeneratorWindow::IsPerformanceDetailsChecked() const
+{
+	return bShowPerformanceDetails ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+void SMinimapGeneratorWindow::OnPerformanceDetailsChanged(const ECheckBoxState NewState)
+{
+	bShowPerformanceDetails = NewState == ECheckBoxState::Checked;
+}
+
+EVisibility SMinimapGeneratorWindow::GetPerformanceDetailsVisibility() const
+{
+	return bShowPerformanceDetails ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+FText SMinimapGeneratorWindow::GetPerformanceDetailsToggleText() const
+{
+	return bShowPerformanceDetails
+		       ? LOCTEXT("HidePerformanceDetails", "Hide Perf")
+		       : LOCTEXT("ShowPerformanceDetails", "Show Perf");
 }
 
 ECheckBoxState SMinimapGeneratorWindow::IsBackgroundModeChecked(EMinimapBackgroundMode Mode) const
