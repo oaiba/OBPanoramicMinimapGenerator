@@ -20,6 +20,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Minimap")
 	static FVector MapUVToWorldLocation(const UMinimapDefinitionDataAsset* MinimapDefinition, FVector2D MapUV, float WorldZ = 0.0f, bool bClampToBounds = true);
 
+	UFUNCTION(BlueprintPure, Category = "Minimap|Tiles")
+	static bool MapUVToTileCoord(const UMinimapTileSetDataAsset* TileSet, FVector2D MapUV, int32 LOD, FMinimapTileCoord& OutCoord, FVector2D& OutTileUV, bool bClampToBounds = true);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Tiles")
+	static bool WorldLocationToTileCoord(const UMinimapDefinitionDataAsset* MinimapDefinition, FVector WorldLocation, int32 LOD, FMinimapTileCoord& OutCoord, FVector2D& OutTileUV, bool bClampToBounds = true);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Tiles")
+	static void GetTilesIntersectingUVRect(const UMinimapTileSetDataAsset* TileSet, FVector2D UVMin, FVector2D UVMax, int32 LOD, TArray<FMinimapTileRef>& OutTiles, bool bClampToBounds = true);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Tiles")
+	static int32 ChooseTileLODForWorldUnitsPerPixel(const UMinimapTileSetDataAsset* TileSet, float RequestedWorldUnitsPerPixel);
+
 	UFUNCTION(BlueprintPure, Category = "Minimap")
 	static void GetOverlayElementsByCategory(const UMinimapDefinitionDataAsset* MinimapDefinition, FName Category, TArray<FMinimapOverlayElement>& OutElements);
 

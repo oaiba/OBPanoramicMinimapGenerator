@@ -98,9 +98,14 @@ private:
 
 	// Tiling Settings
 	TSharedPtr<SCheckBox> UseTilingCheckbox; // Tiling toggle checkbox.
+	TSharedPtr<SCheckBox> ExportTileSetCheckbox;
 	TSharedPtr<SSpinBox<int32>> TileResolution;
 	TSharedPtr<SSpinBox<int32>> TileOverlap;
+	TSharedPtr<SSpinBox<float>> TileSetWorldTileSize;
+	TSharedPtr<SSpinBox<int32>> TileSetMaxLOD;
+	TSharedPtr<SSpinBox<int32>> TileSetOverviewResolution;
 	EVisibility GetTilingSettingsVisibility() const; // Tiling options visibility helper.
+	EVisibility GetTileSetSettingsVisibility() const;
 
 	// Camera Settings
 	TSharedPtr<SSpinBox<float>> CameraHeight;

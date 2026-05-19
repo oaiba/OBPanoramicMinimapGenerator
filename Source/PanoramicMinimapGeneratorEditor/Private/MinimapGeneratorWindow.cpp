@@ -178,6 +178,14 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 							[
 								SNew(SVerticalBox)
 								.Visibility(this, &SMinimapGeneratorWindow::GetTilingSettingsVisibility)
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+								[
+									SAssignNew(ExportTileSetCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
+									[
+										SNew(STextBlock)
+										.Text(LOCTEXT("ExportTileSetLabel", "Export Tile Set + LOD instead of stitched texture"))
+									]
+								]
 								+ SVerticalBox::Slot().AutoHeight()
 								[
 									SNew(SHorizontalBox)
@@ -204,6 +212,56 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									+ SHorizontalBox::Slot().FillWidth(0.6f)
 									[
 										SAssignNew(TileOverlap, SSpinBox<int32>).MinValue(0).MaxValue(1024).Value(1024)
+									]
+								]
+								+ SVerticalBox::Slot().AutoHeight()
+								[
+									SNew(SVerticalBox)
+									.Visibility(this, &SMinimapGeneratorWindow::GetTileSetSettingsVisibility)
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[
+											SNew(STextBlock).Text(LOCTEXT("TileWorldSizeLabel", "World Tile Size"))
+										]
+										+ SHorizontalBox::Slot().FillWidth(0.6f)
+										[
+											SAssignNew(TileSetWorldTileSize, SSpinBox<float>)
+											.MinValue(100.0f)
+											.MaxValue(100000.0f)
+											.Value(1000.0f)
+										]
+									]
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[
+											SNew(STextBlock).Text(LOCTEXT("TileSetMaxLODLabel", "Max LOD"))
+										]
+										+ SHorizontalBox::Slot().FillWidth(0.6f)
+										[
+											SAssignNew(TileSetMaxLOD, SSpinBox<int32>)
+											.MinValue(0)
+											.MaxValue(8)
+											.Value(3)
+										]
+									]
+									+ SVerticalBox::Slot().AutoHeight()
+									[
+										SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[
+											SNew(STextBlock).Text(LOCTEXT("TileOverviewResLabel", "LOD0 Resolution"))
+										]
+										+ SHorizontalBox::Slot().FillWidth(0.6f)
+										[
+											SAssignNew(TileSetOverviewResolution, SSpinBox<int32>)
+											.MinValue(256)
+											.MaxValue(4096)
+											.Value(1024)
+										]
 									]
 								]
 							]
@@ -1241,17 +1299,28 @@ void SMinimapGeneratorWindow::OnOutputHeightChanged(TSharedPtr<int32> NewSelecti
 
 EVisibility SMinimapGeneratorWindow::GetAssetPathVisibility() const
 {
-	return ImportAsAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Hidden;
+	const bool bNeedsAssetPath = ImportAsAssetCheckbox->IsChecked()
+		|| (ExportTileSetCheckbox.IsValid() && ExportTileSetCheckbox->IsChecked());
+	return bNeedsAssetPath ? EVisibility::Visible : EVisibility::Hidden;
 }
 
 EVisibility SMinimapGeneratorWindow::GetDefinitionAssetPathVisibility() const
 {
-	return ExportDefinitionAssetCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Hidden;
+	const bool bNeedsDefinitionPath = ExportDefinitionAssetCheckbox->IsChecked()
+		|| (ExportTileSetCheckbox.IsValid() && ExportTileSetCheckbox->IsChecked());
+	return bNeedsDefinitionPath ? EVisibility::Visible : EVisibility::Hidden;
 }
 
 EVisibility SMinimapGeneratorWindow::GetTilingSettingsVisibility() const
 {
 	return UseTilingCheckbox->IsChecked() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+EVisibility SMinimapGeneratorWindow::GetTileSetSettingsVisibility() const
+{
+	return ExportTileSetCheckbox.IsValid() && ExportTileSetCheckbox->IsChecked()
+		       ? EVisibility::Visible
+		       : EVisibility::Collapsed;
 }
 
 // START ZOOM FUNCTIONALITY
@@ -1398,15 +1467,28 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
 	}
 	Settings.bExportDefinitionAsset = ExportDefinitionAssetCheckbox->IsChecked();
-	if (Settings.bExportDefinitionAsset)
+	Settings.bUseTiling = UseTilingCheckbox->IsChecked();
+	Settings.bExportTileSet = Settings.bUseTiling && ExportTileSetCheckbox.IsValid() && ExportTileSetCheckbox->IsChecked();
+	if (Settings.bExportTileSet)
+	{
+		Settings.bExportDefinitionAsset = true;
+		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
+		Settings.DefinitionAssetPath = DefinitionAssetPathTextBox->GetText().ToString();
+	}
+	else if (Settings.bExportDefinitionAsset)
 	{
 		Settings.DefinitionAssetPath = DefinitionAssetPathTextBox->GetText().ToString();
 		Settings.bImportAsTextureAsset = true;
 		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
 	}
-	Settings.bUseTiling = UseTilingCheckbox->IsChecked();
 	Settings.TileResolution = TileResolution->GetValue();
 	Settings.TileOverlap = TileOverlap->GetValue();
+	if (Settings.bExportTileSet)
+	{
+		Settings.TileSetWorldTileSize = TileSetWorldTileSize.IsValid() ? TileSetWorldTileSize->GetValue() : 1000.0f;
+		Settings.TileSetMaxLOD = TileSetMaxLOD.IsValid() ? TileSetMaxLOD->GetValue() : 3;
+		Settings.TileSetOverviewResolution = TileSetOverviewResolution.IsValid() ? TileSetOverviewResolution->GetValue() : 1024;
+	}
 	Settings.CameraHeight = CameraHeight->GetValue();
 	// Note FRotator constructor argument order: (Pitch, Yaw, Roll).
 	Settings.CameraRotation = FRotator(
@@ -1480,8 +1562,21 @@ void SMinimapGeneratorWindow::SaveSettings() const
 	GConfig->SetColor(*Section, TEXT("BackgroundColor"), SelectedBackgroundColor.ToFColor(true), ConfigPath);
 
 	GConfig->SetBool(*Section, TEXT("UseTiling"), UseTilingCheckbox->IsChecked(), ConfigPath);
+	GConfig->SetBool(*Section, TEXT("ExportTileSet"), ExportTileSetCheckbox.IsValid() && ExportTileSetCheckbox->IsChecked(), ConfigPath);
 	GConfig->SetInt(*Section, TEXT("TileResolution"), TileResolution->GetValue(), ConfigPath);
 	GConfig->SetInt(*Section, TEXT("TileOverlap"), TileOverlap->GetValue(), ConfigPath);
+	if (TileSetWorldTileSize.IsValid())
+	{
+		GConfig->SetFloat(*Section, TEXT("TileSetWorldTileSize"), TileSetWorldTileSize->GetValue(), ConfigPath);
+	}
+	if (TileSetMaxLOD.IsValid())
+	{
+		GConfig->SetInt(*Section, TEXT("TileSetMaxLOD"), TileSetMaxLOD->GetValue(), ConfigPath);
+	}
+	if (TileSetOverviewResolution.IsValid())
+	{
+		GConfig->SetInt(*Section, TEXT("TileSetOverviewResolution"), TileSetOverviewResolution->GetValue(), ConfigPath);
+	}
 
 	GConfig->SetFloat(*Section, TEXT("CameraHeight"), CameraHeight->GetValue(), ConfigPath);
 	GConfig->SetFloat(*Section, TEXT("RotationPitch"), RotationPitchSpinBox->GetValue(), ConfigPath);
@@ -1538,8 +1633,12 @@ void SMinimapGeneratorWindow::LoadSettings()
 	if (GConfig->GetColor(*Section, TEXT("BackgroundColor"), ColorVal, ConfigPath)) SelectedBackgroundColor = FLinearColor(ColorVal);
 
 	if (GConfig->GetBool(*Section, TEXT("UseTiling"), bBoolVal, ConfigPath)) UseTilingCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
+	if (GConfig->GetBool(*Section, TEXT("ExportTileSet"), bBoolVal, ConfigPath) && ExportTileSetCheckbox.IsValid()) ExportTileSetCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
 	if (GConfig->GetInt(*Section, TEXT("TileResolution"), IntVal, ConfigPath)) TileResolution->SetValue(IntVal);
 	if (GConfig->GetInt(*Section, TEXT("TileOverlap"), IntVal, ConfigPath)) TileOverlap->SetValue(IntVal);
+	if (GConfig->GetFloat(*Section, TEXT("TileSetWorldTileSize"), FloatVal, ConfigPath) && TileSetWorldTileSize.IsValid()) TileSetWorldTileSize->SetValue(FloatVal);
+	if (GConfig->GetInt(*Section, TEXT("TileSetMaxLOD"), IntVal, ConfigPath) && TileSetMaxLOD.IsValid()) TileSetMaxLOD->SetValue(IntVal);
+	if (GConfig->GetInt(*Section, TEXT("TileSetOverviewResolution"), IntVal, ConfigPath) && TileSetOverviewResolution.IsValid()) TileSetOverviewResolution->SetValue(IntVal);
 
 	if (GConfig->GetFloat(*Section, TEXT("CameraHeight"), FloatVal, ConfigPath)) CameraHeight->SetValue(FloatVal);
 	if (GConfig->GetFloat(*Section, TEXT("RotationPitch"), FloatVal, ConfigPath)) RotationPitchSpinBox->SetValue(FloatVal);

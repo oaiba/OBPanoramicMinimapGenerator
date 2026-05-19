@@ -15,6 +15,9 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "RHICommandList.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/PackageName.h"
+#include "PackageTools.h"
+#include "UObject/SavePackage.h"
 
 class FSaveImageTask : public FNonAbandonableTask
 {
@@ -78,6 +81,23 @@ protected:
 	FString FullPath;
 	TWeakObjectPtr<UMinimapGeneratorManager> ManagerPtr;
 };
+
+namespace
+{
+constexpr int64 MaxLegacyStitchedPixels = 8192LL * 8192LL;
+constexpr int32 TileSetGarbageCollectBatchSize = 12;
+
+FString MakeSafeAssetName(const FString& InName)
+{
+	FString SafeName = InName;
+	SafeName.ReplaceInline(TEXT(" "), TEXT("_"));
+	SafeName.ReplaceInline(TEXT("-"), TEXT("_"));
+	SafeName.ReplaceInline(TEXT("."), TEXT("_"));
+	SafeName.ReplaceInline(TEXT("/"), TEXT("_"));
+	SafeName.ReplaceInline(TEXT("\\"), TEXT("_"));
+	return SafeName.IsEmpty() ? TEXT("Minimap") : SafeName;
+}
+}
 
 // =================== START OF NEW CODE ===================
 // AsyncTask to save INDIVIDUAL DEBUG TILES to disk on a background thread.
@@ -181,8 +201,30 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 		return;
 	}
 
+	if (Settings.bUseTiling && Settings.bExportTileSet)
+	{
+		if (Settings.TileSetWorldTileSize <= 0.0f || Settings.TileSetMaxLOD < 0 || Settings.TileSetOverviewResolution <= 0)
+		{
+			OnCaptureComplete.Broadcast(false, TEXT("Invalid tile-set settings."));
+			return;
+		}
+	}
+	else if (Settings.bUseTiling)
+	{
+		const int64 OutputPixels = static_cast<int64>(Settings.OutputWidth) * Settings.OutputHeight;
+		if (OutputPixels > MaxLegacyStitchedPixels)
+		{
+			OnCaptureComplete.Broadcast(false, TEXT("Legacy tiled stitching is capped at 8192x8192 to avoid RAM exhaustion. Enable Tile Set + LOD export for large maps."));
+			return;
+		}
+	}
+
 	OnProgress.Broadcast(FText::FromString(TEXT("Starting capture process...")), 0.0f, 0, 1);
-	if (Settings.bUseTiling)
+	if (Settings.bUseTiling && Settings.bExportTileSet)
+	{
+		StartTileSetCaptureProcess();
+	}
+	else if (Settings.bUseTiling)
 	{
 		StartTiledCaptureProcess();
 	}
@@ -205,6 +247,8 @@ void UMinimapGeneratorManager::ShutdownCapture(const bool bBroadcastResult)
 
 	CleanupCaptureResources();
 	CapturedTileData.Empty();
+	TileSetExportLevels.Empty();
+	TileSetTilesSinceGarbageCollect = 0;
 
 	if (bBroadcastResult && !IsEngineExitRequested())
 	{
@@ -384,7 +428,51 @@ UTexture2D* UMinimapGeneratorManager::ImportTextureAssetFromSavedImage(const FSt
 	return NewTexture;
 }
 
-UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture) const
+TSoftObjectPtr<UTexture2D> UMinimapGeneratorManager::ImportTileTextureAssetFromPixels(const TArray<FColor>& PixelData,
+                                                                                      const int32 Width,
+                                                                                      const int32 Height,
+                                                                                      const FString& PackagePath,
+                                                                                      const FString& AssetName) const
+{
+	if (PixelData.Num() != Width * Height || Width <= 0 || Height <= 0)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Error, TEXT("%hs: Invalid pixel data for %s."), __FUNCTION__, *AssetName);
+		return nullptr;
+	}
+
+	const FString NormalizedPackagePath = NormalizePackagePath(PackagePath);
+	const FString SafeAssetName = MakeSafeAssetName(AssetName);
+	const FString FullAssetPath = NormalizedPackagePath + SafeAssetName;
+
+	UPackage* Package = CreatePackage(*FullAssetPath);
+	Package->FullyLoad();
+
+	UTexture2D* NewTexture = FindObject<UTexture2D>(Package, *SafeAssetName);
+	if (!NewTexture)
+	{
+		NewTexture = NewObject<UTexture2D>(Package, *SafeAssetName, RF_Public | RF_Standalone);
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		AssetRegistryModule.AssetCreated(NewTexture);
+	}
+
+	NewTexture->Source.Init(Width, Height, 1, 1, TSF_BGRA8, reinterpret_cast<const uint8*>(PixelData.GetData()));
+	NewTexture->SRGB = true;
+	NewTexture->CompressionSettings = TC_Default;
+	NewTexture->MarkPackageDirty();
+	Package->MarkPackageDirty();
+
+	SaveAssetPackage(Package, NewTexture);
+
+	const FSoftObjectPath TexturePath(FString::Printf(TEXT("%s.%s"), *FullAssetPath, *SafeAssetName));
+	FText UnloadErrorMessage;
+	UPackageTools::UnloadPackages({Package}, UnloadErrorMessage, true);
+
+	return TSoftObjectPtr<UTexture2D>(TexturePath);
+}
+
+UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionAsset(const FString& SavedImagePath,
+                                                                                     UTexture2D* BaseMapTexture,
+                                                                                     UMinimapTileSetDataAsset* TileSet) const
 {
 	FString PackagePath = Settings.DefinitionAssetPath;
 	if (!PackagePath.StartsWith(TEXT("/Game")))
@@ -396,7 +484,8 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 		PackagePath += TEXT("/");
 	}
 
-	const FString AssetName = TEXT("DA_") + FPaths::GetBaseFilename(SavedImagePath);
+	const FString SourceName = SavedImagePath.IsEmpty() ? Settings.FileName : FPaths::GetBaseFilename(SavedImagePath);
+	const FString AssetName = MakeSafeAssetName(TEXT("DA_") + SourceName);
 	const FString FullAssetPath = PackagePath + AssetName;
 	UPackage* Package = CreatePackage(*FullAssetPath);
 	Package->FullyLoad();
@@ -410,15 +499,77 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 	}
 
 	DefinitionAsset->BaseMapTexture = BaseMapTexture;
+	DefinitionAsset->TileSet = TileSet;
 	DefinitionAsset->WorldBounds = Settings.CaptureBounds;
 	DefinitionAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
 	DefinitionAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
 	DefinitionAsset->OverlayLayers = Settings.OverlayLayers;
 	DefinitionAsset->MarkPackageDirty();
 	Package->MarkPackageDirty();
+	SaveAssetPackage(Package, DefinitionAsset);
 
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Created/updated minimap definition asset: %s"), *FullAssetPath);
 	return DefinitionAsset;
+}
+
+UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset() const
+{
+	const FString PackagePath = NormalizePackagePath(Settings.DefinitionAssetPath);
+	const FString AssetName = MakeSafeAssetName(TEXT("DA_") + Settings.FileName + TEXT("_TileSet"));
+	const FString FullAssetPath = PackagePath + AssetName;
+
+	UPackage* Package = CreatePackage(*FullAssetPath);
+	Package->FullyLoad();
+
+	UMinimapTileSetDataAsset* TileSetAsset = FindObject<UMinimapTileSetDataAsset>(Package, *AssetName);
+	if (!TileSetAsset)
+	{
+		TileSetAsset = NewObject<UMinimapTileSetDataAsset>(Package, *AssetName, RF_Public | RF_Standalone);
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		AssetRegistryModule.AssetCreated(TileSetAsset);
+	}
+
+	TileSetAsset->SchemaVersion = 1;
+	TileSetAsset->WorldBounds = Settings.CaptureBounds;
+	TileSetAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
+	TileSetAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
+	TileSetAsset->bClampQueriesToBounds = true;
+	TileSetAsset->PyramidLevels = TileSetExportLevels;
+	TileSetAsset->OverlayLayers = Settings.OverlayLayers;
+	TileSetAsset->MarkPackageDirty();
+	Package->MarkPackageDirty();
+	SaveAssetPackage(Package, TileSetAsset);
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Created/updated tile-set asset: %s"), *FullAssetPath);
+	return TileSetAsset;
+}
+
+bool UMinimapGeneratorManager::SaveAssetPackage(UPackage* Package, UObject* Asset) const
+{
+	if (!Package || !Asset)
+	{
+		return false;
+	}
+
+	const FString PackageFilename = FPackageName::LongPackageNameToFilename(
+		Package->GetName(),
+		FPackageName::GetAssetPackageExtension());
+
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags = SAVE_NoError;
+
+	const bool bSaved = UPackage::SavePackage(Package, Asset, *PackageFilename, SaveArgs);
+	if (bSaved)
+	{
+		Package->SetDirtyFlag(false);
+	}
+	else
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("Failed to save package: %s"), *Package->GetName());
+	}
+
+	return bSaved;
 }
 
 void UMinimapGeneratorManager::CleanupCaptureResources()
@@ -451,8 +602,11 @@ void UMinimapGeneratorManager::CleanupCaptureResources()
 
 UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget() const
 {
-	const int32 TargetWidth = Settings.bUseTiling ? Settings.TileResolution : Settings.OutputWidth;
-	const int32 TargetHeight = Settings.bUseTiling ? Settings.TileResolution : Settings.OutputHeight;
+	const int32 TileSetResolution = (Settings.bExportTileSet && CurrentTileLOD == 0)
+		                                ? Settings.TileSetOverviewResolution
+		                                : Settings.TileResolution;
+	const int32 TargetWidth = Settings.bUseTiling ? TileSetResolution : Settings.OutputWidth;
+	const int32 TargetHeight = Settings.bUseTiling ? TileSetResolution : Settings.OutputHeight;
 
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
 
@@ -758,6 +912,322 @@ void UMinimapGeneratorManager::BuildFinalShowOnlyList(TArray<AActor*>& OutShowOn
 // ===================================================================
 // FLOW 2: TILED CAPTURE
 // ===================================================================
+
+FString UMinimapGeneratorManager::NormalizePackagePath(const FString& InPackagePath) const
+{
+	FString PackagePath = InPackagePath;
+	if (!PackagePath.StartsWith(TEXT("/Game")))
+	{
+		PackagePath = TEXT("/Game/Minimaps/");
+	}
+	if (!PackagePath.EndsWith(TEXT("/")))
+	{
+		PackagePath += TEXT("/");
+	}
+
+	return PackagePath;
+}
+
+void UMinimapGeneratorManager::StartTileSetCaptureProcess()
+{
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Starting direct tile-set capture process."));
+
+	CurrentTileIndex = 0;
+	CurrentTileLOD = 0;
+	CapturedTileData.Empty();
+	TileSetExportLevels.Empty();
+	ActiveCaptureActor.Reset();
+	ActiveRenderTarget.Reset();
+	TileSetTilesSinceGarbageCollect = 0;
+
+	InitializeTileSetExportLevels();
+	if (TileSetExportLevels.Num() == 0)
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Invalid tile-set grid."));
+		return;
+	}
+
+	CurrentTileSetGrid = TileSetExportLevels[0].GridDimensions;
+	ActiveRenderTarget = CreateRenderTarget();
+	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
+
+	if (!ActiveCaptureActor.IsValid() || !ActiveRenderTarget.IsValid())
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Failed to create capture actor or render target for tile-set export."));
+		return;
+	}
+
+	CaptureNextTileSetTile();
+}
+
+void UMinimapGeneratorManager::InitializeTileSetExportLevels()
+{
+	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
+	const int32 FullTilesX = FMath::Max(1, FMath::CeilToInt(BoundsSize.X / Settings.TileSetWorldTileSize));
+	const int32 FullTilesY = FMath::Max(1, FMath::CeilToInt(BoundsSize.Y / Settings.TileSetWorldTileSize));
+	const int32 MaxLOD = FMath::Clamp(Settings.TileSetMaxLOD, 0, 8);
+
+	TileSetExportLevels.Reserve(MaxLOD + 1);
+	for (int32 LOD = 0; LOD <= MaxLOD; ++LOD)
+	{
+		const int32 TargetGrid = 1 << LOD;
+		const FIntPoint GridDimensions(
+			LOD == MaxLOD ? FullTilesX : FMath::Clamp(TargetGrid, 1, FullTilesX),
+			LOD == MaxLOD ? FullTilesY : FMath::Clamp(TargetGrid, 1, FullTilesY));
+		const int32 TilePixels = LOD == 0 ? Settings.TileSetOverviewResolution : Settings.TileResolution;
+
+		FMinimapTilePyramidLevel Level;
+		Level.LOD = LOD;
+		Level.GridDimensions = GridDimensions;
+		Level.TilePixelSize = FIntPoint(TilePixels, TilePixels);
+		Level.WorldTileSize = FVector2D(BoundsSize.X / GridDimensions.X, BoundsSize.Y / GridDimensions.Y);
+		Level.LogicalPixelSize = FIntPoint(GridDimensions.X * TilePixels, GridDimensions.Y * TilePixels);
+		Level.Tiles.Reserve(GridDimensions.X * GridDimensions.Y);
+		TileSetExportLevels.Add(Level);
+	}
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Initialized tile-set pyramid: FullGrid=%dx%d, LODs=%d"),
+		FullTilesX, FullTilesY, TileSetExportLevels.Num());
+}
+
+bool UMinimapGeneratorManager::AdvanceToNextTileSetLevel()
+{
+	if (ActiveCaptureActor.IsValid())
+	{
+		ActiveCaptureActor->Destroy();
+	}
+	ActiveCaptureActor.Reset();
+
+	if (ActiveRenderTarget.IsValid())
+	{
+		ActiveRenderTarget->ConditionalBeginDestroy();
+	}
+	ActiveRenderTarget.Reset();
+
+	CurrentTileLOD++;
+	CurrentTileIndex = 0;
+	if (!TileSetExportLevels.IsValidIndex(CurrentTileLOD))
+	{
+		return false;
+	}
+
+	CurrentTileSetGrid = TileSetExportLevels[CurrentTileLOD].GridDimensions;
+	ActiveRenderTarget = CreateRenderTarget();
+	ActiveCaptureActor = SpawnAndConfigureCaptureActor(ActiveRenderTarget.Get());
+
+	return ActiveCaptureActor.IsValid() && ActiveRenderTarget.IsValid();
+}
+
+FBox UMinimapGeneratorManager::GetTileSetTileWorldBounds(const int32 LOD, const int32 TileX, const int32 TileY) const
+{
+	if (!TileSetExportLevels.IsValidIndex(LOD))
+	{
+		return FBox(ForceInit);
+	}
+
+	const FMinimapTilePyramidLevel& Level = TileSetExportLevels[LOD];
+	const FVector BoundsMin = Settings.CaptureBounds.Min;
+	const FVector BoundsMax = Settings.CaptureBounds.Max;
+	const FVector2D TileWorldSize = Level.WorldTileSize;
+
+	const FVector TileMin(
+		BoundsMin.X + TileX * TileWorldSize.X,
+		TileY == Level.GridDimensions.Y - 1 ? BoundsMin.Y : BoundsMax.Y - (TileY + 1) * TileWorldSize.Y,
+		BoundsMin.Z);
+	const FVector TileMax(
+		TileX == Level.GridDimensions.X - 1 ? BoundsMax.X : TileMin.X + TileWorldSize.X,
+		BoundsMax.Y - TileY * TileWorldSize.Y,
+		BoundsMax.Z);
+
+	return FBox(TileMin, TileMax);
+}
+
+void UMinimapGeneratorManager::CaptureNextTileSetTile()
+{
+	if (bCancelRequested)
+	{
+		return;
+	}
+
+	if (!TileSetExportLevels.IsValidIndex(CurrentTileLOD))
+	{
+		FinalizeTileSetExport();
+		return;
+	}
+
+	const FMinimapTilePyramidLevel& Level = TileSetExportLevels[CurrentTileLOD];
+	const int32 TilesInLevel = Level.GridDimensions.X * Level.GridDimensions.Y;
+	if (CurrentTileIndex >= TilesInLevel)
+	{
+		if (AdvanceToNextTileSetLevel())
+		{
+			CaptureNextTileSetTile();
+		}
+		else
+		{
+			FinalizeTileSetExport();
+		}
+		return;
+	}
+
+	if (!ActiveCaptureActor.IsValid() || !ActiveRenderTarget.IsValid())
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Capture actor or render target became invalid during tile-set capture."));
+		return;
+	}
+
+	const int32 TileX = CurrentTileIndex % Level.GridDimensions.X;
+	const int32 TileY = CurrentTileIndex / Level.GridDimensions.X;
+	const FBox TileWorldBounds = GetTileSetTileWorldBounds(CurrentTileLOD, TileX, TileY);
+	const FVector TileCenter = TileWorldBounds.GetCenter();
+	const FVector TileSize = TileWorldBounds.GetSize();
+
+	ActiveCaptureActor->SetActorLocation(FVector(TileCenter.X, TileCenter.Y, Settings.CameraHeight));
+	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureActor->GetCaptureComponent2D();
+	CaptureComponent->OrthoWidth = FMath::Max(TileSize.X, TileSize.Y);
+	CaptureComponent->CaptureScene();
+
+	int32 TotalTiles = 0;
+	int32 CompletedBeforeLevel = 0;
+	for (int32 LevelIndex = 0; LevelIndex < TileSetExportLevels.Num(); ++LevelIndex)
+	{
+		const int32 LevelTileCount = TileSetExportLevels[LevelIndex].GridDimensions.X * TileSetExportLevels[LevelIndex].GridDimensions.Y;
+		TotalTiles += LevelTileCount;
+		if (LevelIndex < CurrentTileLOD)
+		{
+			CompletedBeforeLevel += LevelTileCount;
+		}
+	}
+
+	const int32 CompletedTiles = CompletedBeforeLevel + CurrentTileIndex;
+	const float CurrentProgress = TotalTiles > 0 ? static_cast<float>(CompletedTiles) / TotalTiles : 0.0f;
+	OnProgress.Broadcast(
+		FText::Format(FText::FromString("Capturing tile-set LOD {0} tile {1}/{2}..."),
+			FText::AsNumber(CurrentTileLOD),
+			FText::AsNumber(CurrentTileIndex + 1),
+			FText::AsNumber(TilesInLevel)),
+		CurrentProgress * 0.95f,
+		CurrentTileIndex,
+		TilesInLevel);
+
+	if (GEditor)
+	{
+		FTimerHandle TempHandle;
+		GEditor->GetTimerManager()->SetTimer(
+			TempHandle, this, &UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue, 0.2f, false);
+	}
+}
+
+void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
+{
+	if (bCancelRequested)
+	{
+		return;
+	}
+
+	UTextureRenderTarget2D* RenderTarget = ActiveRenderTarget.Get();
+	if (!RenderTarget || !TileSetExportLevels.IsValidIndex(CurrentTileLOD))
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Render target lost during tile-set capture."));
+		return;
+	}
+
+	TArray<FColor> TilePixels;
+	int32 TileWidth = 0;
+	int32 TileHeight = 0;
+	if (auto* RTResource = static_cast<FTextureRenderTargetResource*>(RenderTarget->GetResource()))
+	{
+		FlushRenderingCommands();
+		RTResource->ReadPixels(TilePixels);
+		TileWidth = RTResource->GetSizeX();
+		TileHeight = RTResource->GetSizeY();
+	}
+
+	if (TilePixels.Num() > 0)
+	{
+		FMinimapTilePyramidLevel& Level = TileSetExportLevels[CurrentTileLOD];
+		const int32 TileX = CurrentTileIndex % Level.GridDimensions.X;
+		const int32 TileY = CurrentTileIndex / Level.GridDimensions.X;
+		const FString BaseName = MakeSafeAssetName(Settings.FileName);
+		const FString TexturePackagePath = NormalizePackagePath(Settings.AssetPath)
+			+ BaseName + TEXT("/Tiles/LOD_") + FString::FromInt(CurrentTileLOD) + TEXT("/");
+		const FString TextureAssetName = FString::Printf(TEXT("T_%s_L%d_X%d_Y%d"), *BaseName, CurrentTileLOD, TileX, TileY);
+
+		const TSoftObjectPtr<UTexture2D> TileTexture = ImportTileTextureAssetFromPixels(
+			TilePixels, TileWidth, TileHeight, TexturePackagePath, TextureAssetName);
+
+		const FBox TileWorldBounds = GetTileSetTileWorldBounds(CurrentTileLOD, TileX, TileY);
+		const FVector BoundsSize = Settings.CaptureBounds.GetSize();
+		const FVector BoundsMin = Settings.CaptureBounds.Min;
+
+		FMinimapTileRef TileRef;
+		TileRef.Coord.LOD = CurrentTileLOD;
+		TileRef.Coord.X = TileX;
+		TileRef.Coord.Y = TileY;
+		TileRef.Texture = TileTexture;
+		TileRef.ValidPixelMin = FIntPoint::ZeroValue;
+		TileRef.ValidPixelMax = FIntPoint(TileWidth, TileHeight);
+		TileRef.WorldBounds = TileWorldBounds;
+		TileRef.UVMin = FVector2D(
+			(TileWorldBounds.Min.X - BoundsMin.X) / BoundsSize.X,
+			1.0f - ((TileWorldBounds.Max.Y - BoundsMin.Y) / BoundsSize.Y));
+		TileRef.UVMax = FVector2D(
+			(TileWorldBounds.Max.X - BoundsMin.X) / BoundsSize.X,
+			1.0f - ((TileWorldBounds.Min.Y - BoundsMin.Y) / BoundsSize.Y));
+		Level.Tiles.Add(TileRef);
+
+		TilePixels.Empty();
+		TileSetTilesSinceGarbageCollect++;
+		if (TileSetTilesSinceGarbageCollect >= TileSetGarbageCollectBatchSize)
+		{
+			TileSetTilesSinceGarbageCollect = 0;
+			CollectGarbage(RF_NoFlags);
+		}
+	}
+	else
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("Tile-set LOD %d tile %d rendered with empty pixel data."),
+			CurrentTileLOD, CurrentTileIndex);
+	}
+
+	CurrentTileIndex++;
+	CaptureNextTileSetTile();
+}
+
+void UMinimapGeneratorManager::FinalizeTileSetExport()
+{
+	CleanupCaptureResources();
+	OnProgress.Broadcast(FText::FromString(TEXT("Saving tile-set metadata...")), 0.98f, 0, 0);
+
+	UMinimapTileSetDataAsset* TileSetAsset = CreateOrUpdateTileSetAsset();
+	if (!TileSetAsset)
+	{
+		OnCaptureComplete.Broadcast(false, TEXT("Failed to create tile-set asset."));
+		return;
+	}
+
+	UMinimapDefinitionDataAsset* DefinitionAsset = nullptr;
+	if (Settings.bExportDefinitionAsset)
+	{
+		DefinitionAsset = CreateOrUpdateDefinitionAsset(TEXT(""), nullptr, TileSetAsset);
+	}
+
+	if (GEditor && !IsEngineExitRequested())
+	{
+		TArray<UObject*> AssetsToSync;
+		AssetsToSync.Add(TileSetAsset);
+		if (DefinitionAsset)
+		{
+			AssetsToSync.Add(DefinitionAsset);
+		}
+		GEditor->SyncBrowserToObjects(AssetsToSync);
+	}
+
+	OnProgress.Broadcast(FText::FromString(TEXT("Done!")), 1.0f, 0, 0);
+	OnCaptureComplete.Broadcast(true, TileSetAsset->GetPathName());
+	TileSetExportLevels.Empty();
+	CollectGarbage(RF_NoFlags);
+}
 
 void UMinimapGeneratorManager::StartTiledCaptureProcess()
 {

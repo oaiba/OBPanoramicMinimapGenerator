@@ -33,12 +33,24 @@ struct FMinimapCaptureSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling")
 	bool bUseTiling = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
+	bool bExportTileSet = false;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
 	int32 TileResolution = 2048;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling"))
 	int32 TileOverlap = 64;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling && bExportTileSet"))
+	float TileSetWorldTileSize = 1000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling && bExportTileSet"))
+	int32 TileSetMaxLOD = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling", meta = (EditCondition = "bUseTiling && bExportTileSet"))
+	int32 TileSetOverviewResolution = 1024;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debugging", meta = (
 	EditCondition = "bUseTiling", Tooltip = "If checked, saves each captured tile as a separate image for debugging the stitching process."))
@@ -165,7 +177,12 @@ private:
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
 	UTexture2D* ImportTextureAssetFromSavedImage(const FString& SavedImagePath) const;
-	UMinimapDefinitionDataAsset* CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture) const;
+	TSoftObjectPtr<UTexture2D> ImportTileTextureAssetFromPixels(const TArray<FColor>& PixelData, int32 Width, int32 Height,
+	                                                            const FString& PackagePath, const FString& AssetName) const;
+	UMinimapDefinitionDataAsset* CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture,
+	                                                           UMinimapTileSetDataAsset* TileSet = nullptr) const;
+	UMinimapTileSetDataAsset* CreateOrUpdateTileSetAsset() const;
+	bool SaveAssetPackage(UPackage* Package, UObject* Asset) const;
 	void CleanupCaptureResources();
 
 	// === FUNCTIONS FOR SINGLE CAPTURE ===
@@ -222,6 +239,19 @@ private:
 	
 	FIntPoint CurrentCaptureTilePosition;
 	FDelegateHandle ScreenshotCapturedDelegateHandle;
+
+	TArray<FMinimapTilePyramidLevel> TileSetExportLevels;
+	int32 CurrentTileLOD = 0;
+	FIntPoint CurrentTileSetGrid = FIntPoint::ZeroValue;
+	int32 TileSetTilesSinceGarbageCollect = 0;
+	void StartTileSetCaptureProcess();
+	void InitializeTileSetExportLevels();
+	bool AdvanceToNextTileSetLevel();
+	void CaptureNextTileSetTile();
+	void OnTileSetTileRenderedAndContinue();
+	void FinalizeTileSetExport();
+	FBox GetTileSetTileWorldBounds(int32 LOD, int32 TileX, int32 TileY) const;
+	FString NormalizePackagePath(const FString& InPackagePath) const;
 
 	bool bIsSingleCaptureMode = false;
 	bool bCancelRequested = false;
