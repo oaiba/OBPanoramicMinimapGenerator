@@ -251,6 +251,11 @@ private:
 	int32 GetTileSetTotalTileCount() const;
 	FString GetCaptureSourceTelemetryName() const;
 	void TracePanoramicMemory(const TCHAR* Keyword, const FString& Detail) const;
+	void InitializeCaptureRunIdentity();
+	void ApplyCaptureMetadata(UMinimapDefinitionDataAsset* DefinitionAsset) const;
+	void ApplyCaptureMetadata(UMinimapTileSetDataAsset* TileSetAsset) const;
+	bool DoesCaptureRunFolderExist(const FString& RunId) const;
+	FString GetCaptureRunFolderPath() const;
 
 	// === FUNCTIONS FOR SINGLE CAPTURE ===
 	/** Create and configure the Render Target to draw to. */
@@ -298,6 +303,11 @@ private:
 	TArray<FString> PendingUnloadTilePackageNames;
 	FString LegacyTileTempDirectory;
 	FString CaptureSessionId;
+	FString CaptureRunId;
+	FString CaptureRunDisplayName;
+	FString CaptureSourceMapPackage;
+	FString CaptureSourceMapName;
+	FDateTime CaptureStartedAtUtc;
 	int32 NumTilesX = 0;
 	int32 NumTilesY = 0;
 	int32 CurrentTileIndex = 0;

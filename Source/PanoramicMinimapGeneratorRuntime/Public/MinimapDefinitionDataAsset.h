@@ -154,6 +154,39 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TileSet")
 	int32 SchemaVersion = 1;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString CaptureRunId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString CaptureDisplayName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString SourceMapPackage;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString SourceMapName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FDateTime CaptureTimestampUtc;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FBox CaptureBounds = FBox(ForceInit);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FIntPoint CaptureOutputSize = FIntPoint::ZeroValue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	int32 CaptureTileResolution = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	int32 CaptureTileOverlap = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	int32 CaptureTileSetMaxLOD = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	float CaptureTileSetWorldTileSize = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TileSet")
 	FBox WorldBounds = FBox(ForceInit);
 
@@ -187,6 +220,39 @@ class PANORAMICMINIMAPGENERATORRUNTIME_API UMinimapDefinitionDataAsset : public 
 	GENERATED_BODY()
 
 public:
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString CaptureRunId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString CaptureDisplayName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString SourceMapPackage;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FString SourceMapName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FDateTime CaptureTimestampUtc;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FBox CaptureBounds = FBox(ForceInit);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	FIntPoint CaptureOutputSize = FIntPoint::ZeroValue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	int32 CaptureTileResolution = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	int32 CaptureTileOverlap = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	int32 CaptureTileSetMaxLOD = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
+	float CaptureTileSetWorldTileSize = 0.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap")
 	TSoftObjectPtr<UTexture2D> BaseMapTexture;
 

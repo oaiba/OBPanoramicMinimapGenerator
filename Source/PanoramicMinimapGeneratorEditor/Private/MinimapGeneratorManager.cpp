@@ -130,6 +130,24 @@ FString MakeSafeAssetName(const FString& InName)
 	SafeName.ReplaceInline(TEXT("\\"), TEXT("_"));
 	return SafeName.IsEmpty() ? TEXT("Minimap") : SafeName;
 }
+
+bool DoesLongPackageFileExist(const FString& LongPackageName)
+{
+	if (LongPackageName.IsEmpty())
+	{
+		return false;
+	}
+
+	if (FindPackage(nullptr, *LongPackageName))
+	{
+		return true;
+	}
+
+	const FString PackageFilename = FPackageName::LongPackageNameToFilename(
+		LongPackageName,
+		FPackageName::GetAssetPackageExtension());
+	return IFileManager::Get().FileExists(*PackageFilename);
+}
 }
 
 // =================== START OF NEW CODE ===================
@@ -215,6 +233,137 @@ void SaveDebugTileImage(const FString& BasePath, const FString& BaseFileName, co
 
 // =================== END OF NEW CODE ===================
 
+void UMinimapGeneratorManager::InitializeCaptureRunIdentity()
+{
+	CaptureStartedAtUtc = FDateTime::UtcNow();
+	CaptureSourceMapPackage = TEXT("");
+	CaptureSourceMapName = TEXT("UnknownMap");
+
+	if (GEditor)
+	{
+		if (const UWorld* World = GEditor->GetEditorWorldContext().World())
+		{
+			if (const UPackage* WorldPackage = World->GetOutermost())
+			{
+				CaptureSourceMapPackage = WorldPackage->GetName();
+				const FString ShortPackageName = FPackageName::GetShortName(CaptureSourceMapPackage);
+				if (!ShortPackageName.IsEmpty())
+				{
+					CaptureSourceMapName = ShortPackageName;
+				}
+			}
+		}
+	}
+
+	const FString SafeFileName = MakeSafeAssetName(Settings.FileName);
+	const FString SafeMapName = MakeSafeAssetName(CaptureSourceMapName.IsEmpty() ? TEXT("UnknownMap") : CaptureSourceMapName);
+	const FString Timestamp = CaptureStartedAtUtc.ToString(TEXT("%Y%m%d_%H%M%S"));
+	const FString DesiredRunId = FString::Printf(TEXT("%s_%s_%s"), *SafeFileName, *SafeMapName, *Timestamp);
+
+	CaptureRunId = DesiredRunId;
+	int32 CollisionSuffix = 1;
+	while (DoesCaptureRunFolderExist(CaptureRunId))
+	{
+		if (CollisionSuffix <= 999)
+		{
+			CaptureRunId = FString::Printf(TEXT("%s_%03d"), *DesiredRunId, CollisionSuffix);
+			++CollisionSuffix;
+		}
+		else
+		{
+			CaptureRunId = FString::Printf(TEXT("%s_%s"), *DesiredRunId, *FGuid::NewGuid().ToString(EGuidFormats::Short));
+		}
+	}
+
+	if (CaptureRunId != DesiredRunId)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[PANORUN][COLLISION_RESOLVED] DesiredRunId=%s FinalRunId=%s"),
+			*DesiredRunId,
+			*CaptureRunId);
+	}
+
+	CaptureRunDisplayName = FString::Printf(TEXT("%s (%s) %s"),
+		*Settings.FileName,
+		*CaptureSourceMapName,
+		*CaptureStartedAtUtc.ToString(TEXT("%Y-%m-%d %H:%M:%S UTC")));
+
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANORUN][RUN_CREATED] RunId=%s DisplayName=%s SourceMapPackage=%s SourceMapName=%s"),
+		*CaptureRunId,
+		*CaptureRunDisplayName,
+		CaptureSourceMapPackage.IsEmpty() ? TEXT("none") : *CaptureSourceMapPackage,
+		*CaptureSourceMapName);
+
+	if (Settings.bUseTiling && Settings.bExportTileSet)
+	{
+		UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANORUN][RUN_FOLDER] %s"), *GetCaptureRunFolderPath());
+	}
+}
+
+void UMinimapGeneratorManager::ApplyCaptureMetadata(UMinimapDefinitionDataAsset* DefinitionAsset) const
+{
+	if (!DefinitionAsset)
+	{
+		return;
+	}
+
+	DefinitionAsset->CaptureRunId = CaptureRunId;
+	DefinitionAsset->CaptureDisplayName = CaptureRunDisplayName;
+	DefinitionAsset->SourceMapPackage = CaptureSourceMapPackage;
+	DefinitionAsset->SourceMapName = CaptureSourceMapName;
+	DefinitionAsset->CaptureTimestampUtc = CaptureStartedAtUtc;
+	DefinitionAsset->CaptureBounds = Settings.CaptureBounds;
+	DefinitionAsset->CaptureOutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
+	DefinitionAsset->CaptureTileResolution = Settings.TileResolution;
+	DefinitionAsset->CaptureTileOverlap = Settings.TileOverlap;
+	DefinitionAsset->CaptureTileSetMaxLOD = Settings.TileSetMaxLOD;
+	DefinitionAsset->CaptureTileSetWorldTileSize = Settings.TileSetWorldTileSize;
+}
+
+void UMinimapGeneratorManager::ApplyCaptureMetadata(UMinimapTileSetDataAsset* TileSetAsset) const
+{
+	if (!TileSetAsset)
+	{
+		return;
+	}
+
+	TileSetAsset->CaptureRunId = CaptureRunId;
+	TileSetAsset->CaptureDisplayName = CaptureRunDisplayName;
+	TileSetAsset->SourceMapPackage = CaptureSourceMapPackage;
+	TileSetAsset->SourceMapName = CaptureSourceMapName;
+	TileSetAsset->CaptureTimestampUtc = CaptureStartedAtUtc;
+	TileSetAsset->CaptureBounds = Settings.CaptureBounds;
+	TileSetAsset->CaptureOutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
+	TileSetAsset->CaptureTileResolution = Settings.TileResolution;
+	TileSetAsset->CaptureTileOverlap = Settings.TileOverlap;
+	TileSetAsset->CaptureTileSetMaxLOD = Settings.TileSetMaxLOD;
+	TileSetAsset->CaptureTileSetWorldTileSize = Settings.TileSetWorldTileSize;
+}
+
+bool UMinimapGeneratorManager::DoesCaptureRunFolderExist(const FString& RunId) const
+{
+	const FString RunFolderPath = NormalizePackagePath(Settings.DefinitionAssetPath) + RunId + TEXT("/");
+	const FString DefinitionPackageName = RunFolderPath + MakeSafeAssetName(TEXT("DA_") + RunId);
+	const FString TileSetPackageName = RunFolderPath + MakeSafeAssetName(TEXT("DA_") + RunId + TEXT("_TileSet"));
+	if (DoesLongPackageFileExist(DefinitionPackageName) || DoesLongPackageFileExist(TileSetPackageName))
+	{
+		return true;
+	}
+
+	const FString RunFolderPackagePath = RunFolderPath.EndsWith(TEXT("/")) ? RunFolderPath.LeftChop(1) : RunFolderPath;
+	const FString RunFolderFilename = FPackageName::LongPackageNameToFilename(RunFolderPackagePath);
+	return IFileManager::Get().DirectoryExists(*RunFolderFilename);
+}
+
+FString UMinimapGeneratorManager::GetCaptureRunFolderPath() const
+{
+	if (CaptureRunId.IsEmpty())
+	{
+		return NormalizePackagePath(Settings.DefinitionAssetPath);
+	}
+
+	return NormalizePackagePath(Settings.DefinitionAssetPath) + CaptureRunId + TEXT("/");
+}
+
 void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings& InSettings)
 {
 	bIsShuttingDown = false;
@@ -265,6 +414,8 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 			return;
 		}
 	}
+
+	InitializeCaptureRunIdentity();
 
 	const FString CaptureMode = Settings.bUseTiling
 		? (Settings.bExportTileSet ? TEXT("Tile Set + LOD") : TEXT("Legacy Tiled Stitch"))
@@ -607,12 +758,18 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 	{
 		PackagePath = Settings.AssetPath.StartsWith(TEXT("/Game")) ? Settings.AssetPath : TEXT("/Game/Minimaps/");
 	}
-	if (!PackagePath.EndsWith(TEXT("/")))
+	PackagePath = NormalizePackagePath(PackagePath);
+	if (Settings.bUseTiling && Settings.bExportTileSet)
 	{
-		PackagePath += TEXT("/");
+		PackagePath = GetCaptureRunFolderPath();
 	}
 
-	const FString SourceName = SavedImagePath.IsEmpty() ? Settings.FileName : FPaths::GetBaseFilename(SavedImagePath);
+	FString SourceName = SavedImagePath.IsEmpty() ? Settings.FileName : FPaths::GetBaseFilename(SavedImagePath);
+	if ((Settings.bUseTiling && Settings.bExportTileSet)
+		|| (Settings.bUseAutoFilename && Settings.bExportDefinitionAsset && !CaptureRunId.IsEmpty()))
+	{
+		SourceName = CaptureRunId;
+	}
 	const FString AssetName = MakeSafeAssetName(TEXT("DA_") + SourceName);
 	const FString FullAssetPath = PackagePath + AssetName;
 	UPackage* Package = CreatePackage(*FullAssetPath);
@@ -632,6 +789,7 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 	DefinitionAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
 	DefinitionAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
 	DefinitionAsset->OverlayLayers = Settings.OverlayLayers;
+	ApplyCaptureMetadata(DefinitionAsset);
 	DefinitionAsset->MarkPackageDirty();
 	Package->MarkPackageDirty();
 	SaveAssetPackage(Package, DefinitionAsset);
@@ -642,8 +800,8 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 
 UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset()
 {
-	const FString PackagePath = NormalizePackagePath(Settings.DefinitionAssetPath);
-	const FString AssetName = MakeSafeAssetName(TEXT("DA_") + Settings.FileName + TEXT("_TileSet"));
+	const FString PackagePath = GetCaptureRunFolderPath();
+	const FString AssetName = MakeSafeAssetName(TEXT("DA_") + CaptureRunId + TEXT("_TileSet"));
 	const FString FullAssetPath = PackagePath + AssetName;
 
 	UPackage* Package = CreatePackage(*FullAssetPath);
@@ -664,6 +822,7 @@ UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset()
 	TileSetAsset->bClampQueriesToBounds = true;
 	TileSetAsset->PyramidLevels = TileSetExportLevels;
 	TileSetAsset->OverlayLayers = Settings.OverlayLayers;
+	ApplyCaptureMetadata(TileSetAsset);
 	TileSetAsset->MarkPackageDirty();
 	Package->MarkPackageDirty();
 	SaveAssetPackage(Package, TileSetAsset);
@@ -1587,9 +1746,16 @@ void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData, int3
 	FString FinalFileName = Settings.FileName;
 	if (Settings.bUseAutoFilename)
 	{
-		const FDateTime Now = FDateTime::Now();
-		const FString Timestamp = Now.ToString(TEXT("_%Y%m%d_%H%M%S"));
-		FinalFileName += Timestamp;
+		if (Settings.bExportDefinitionAsset && !CaptureRunId.IsEmpty())
+		{
+			FinalFileName = CaptureRunId;
+		}
+		else
+		{
+			const FDateTime Now = FDateTime::Now();
+			const FString Timestamp = Now.ToString(TEXT("_%Y%m%d_%H%M%S"));
+			FinalFileName += Timestamp;
+		}
 	}
 	FinalFileName += TEXT(".png");
 
@@ -1964,10 +2130,9 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 		FMinimapTilePyramidLevel& Level = TileSetExportLevels[CurrentTileLOD];
 		const int32 TileX = CurrentTileIndex % Level.GridDimensions.X;
 		const int32 TileY = CurrentTileIndex / Level.GridDimensions.X;
-		const FString BaseName = MakeSafeAssetName(Settings.FileName);
-		const FString TexturePackagePath = NormalizePackagePath(Settings.AssetPath)
-			+ BaseName + TEXT("/Tiles/LOD_") + FString::FromInt(CurrentTileLOD) + TEXT("/");
-		const FString TextureAssetName = FString::Printf(TEXT("T_%s_L%d_X%d_Y%d"), *BaseName, CurrentTileLOD, TileX, TileY);
+		const FString TexturePackagePath = GetCaptureRunFolderPath()
+			+ TEXT("Tiles/LOD_") + FString::FromInt(CurrentTileLOD) + TEXT("/");
+		const FString TextureAssetName = FString::Printf(TEXT("T_%s_L%d_X%d_Y%d"), *CaptureRunId, CurrentTileLOD, TileX, TileY);
 
 		UpdateTelemetryPhase(TEXT("Importing Tile"));
 		const double ImportStartTime = FPlatformTime::Seconds();
