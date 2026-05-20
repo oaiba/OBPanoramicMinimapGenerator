@@ -13,6 +13,7 @@
 
 class SEditableTextBox;
 class SButton;
+class SBorder;
 class SProgressBar;
 class STextBlock;
 
@@ -35,6 +36,7 @@ private:
 	/** Called when the "Start Capture" button is clicked. */
 	FReply OnStartCaptureClicked();
 	FReply OnCancelCaptureClicked();
+	FReply OnRestartEditorClicked();
 	FReply OnBrowseButtonClicked();
 	FReply OnOpenFolderClicked();
 	FReply OnGetBoundsFromSelectionClicked();
@@ -205,6 +207,7 @@ private:
 	TSharedPtr<STextBlock> TelemetrySummaryText;
 	TSharedPtr<STextBlock> TelemetryTimingText;
 	TSharedPtr<STextBlock> TelemetrySettingsText;
+	TSharedPtr<SBorder> RestartRecommendationBox;
 	FText CachedMemoryStatsText;
 	FSlateColor CachedMemoryStatsColor = FSlateColor::UseForeground();
 	FText CachedMemoryStatsTooltip;

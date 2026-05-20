@@ -11,8 +11,10 @@
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Editor.h"
+#include "UnrealEdMisc.h"
 #include "Selection.h"
 #include "ImageUtils.h"
 #include "Async/Async.h"
@@ -1097,6 +1099,29 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					SAssignNew(StatusText, STextBlock).Text(FText::GetEmpty()).Visibility(EVisibility::Hidden)
 				]
 			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 5)
+			[
+				SAssignNew(RestartRecommendationBox, SBorder)
+				.Padding(FMargin(8, 6))
+				.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
+				.Visibility(EVisibility::Collapsed)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("RestartRecommendationMessage", "Recommendation: restart the editor after capture to restore peak performance and reduce the risk of memory leaks. Sorry for the inconvenience; we are working to improve this in future releases."))
+						.AutoWrapText(true)
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("RestartEditorButton", "Restart Editor"))
+						.ToolTipText(LOCTEXT("RestartEditorButtonTooltip", "Restart the Unreal Editor. You may be prompted to save unsaved work."))
+						.OnClicked(this, &SMinimapGeneratorWindow::OnRestartEditorClicked)
+					]
+				]
+			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
 			[
 				SNew(SBorder)
@@ -1844,6 +1869,12 @@ FReply SMinimapGeneratorWindow::OnCancelCaptureClicked()
 	return FReply::Handled();
 }
 
+FReply SMinimapGeneratorWindow::OnRestartEditorClicked()
+{
+	FUnrealEdMisc::Get().RestartEditor(true);
+	return FReply::Handled();
+}
+
 FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 {
 	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Start Capture button clicked."));
@@ -1963,6 +1994,10 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 
 	ProgressBar->SetVisibility(EVisibility::Visible);
 	StatusText->SetVisibility(EVisibility::Visible);
+	if (RestartRecommendationBox.IsValid())
+	{
+		RestartRecommendationBox->SetVisibility(EVisibility::Visible);
+	}
 	OnCaptureProgress(LOCTEXT("StartingProcess", "Starting..."), 0.f, 0, 0);
 
 	SaveSettings(); // Save user preferences when a capture successfully starts
