@@ -188,10 +188,10 @@ class PANORAMICMINIMAPGENERATORRUNTIME_API UMinimapDefinitionDataAsset : public 
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap")
-	TObjectPtr<UTexture2D> BaseMapTexture = nullptr;
+	TSoftObjectPtr<UTexture2D> BaseMapTexture;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap")
-	TObjectPtr<UMinimapTileSetDataAsset> TileSet = nullptr;
+	TSoftObjectPtr<UMinimapTileSetDataAsset> TileSet;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap")
 	FBox WorldBounds = FBox(ForceInit);

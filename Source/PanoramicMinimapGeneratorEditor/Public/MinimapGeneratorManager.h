@@ -9,6 +9,8 @@
 #include "UObject/Object.h"
 #include "MinimapGeneratorManager.generated.h"
 
+class USceneCaptureComponent2D;
+
 UENUM(BlueprintType)
 enum class EMinimapBackgroundMode : uint8
 {
@@ -54,7 +56,7 @@ struct FMinimapCaptureSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debugging", meta = (
 	EditCondition = "bUseTiling", Tooltip = "If checked, saves each captured tile as a separate image for debugging the stitching process."))
-	bool bSaveTiles = true;
+	bool bSaveTiles = false;
 
 	// QUALITY
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Quality", meta = (
@@ -141,6 +143,14 @@ struct FMinimapCaptureSettings
 
 class FMinimapStreamingSourceProvider;
 
+struct FImportedTextureAssetRef
+{
+	TSoftObjectPtr<UTexture2D> Texture;
+	FString PackageName;
+	FString AssetPath;
+	bool bSaved = false;
+};
+
 struct FMinimapCaptureTelemetry
 {
 	FString CaptureMode = TEXT("Idle");
@@ -213,19 +223,23 @@ private:
 	void OnAllTasksCompleted();
 
 	bool SaveFinalImage(const TArray<FColor>& ImageData, int32 Width, int32 Height);
-	UTexture2D* ImportTextureAssetFromSavedImage(const FString& SavedImagePath);
+	FImportedTextureAssetRef ImportTextureAssetFromSavedImage(const FString& SavedImagePath);
 	TSoftObjectPtr<UTexture2D> ImportTileTextureAssetFromPixels(const TArray<FColor>& PixelData, int32 Width, int32 Height,
 	                                                            const FString& PackagePath, const FString& AssetName);
-	UMinimapDefinitionDataAsset* CreateOrUpdateDefinitionAsset(const FString& SavedImagePath, UTexture2D* BaseMapTexture,
-	                                                           UMinimapTileSetDataAsset* TileSet = nullptr);
+	UMinimapDefinitionDataAsset* CreateOrUpdateDefinitionAsset(const FString& SavedImagePath,
+	                                                           TSoftObjectPtr<UTexture2D> BaseMapTexture,
+	                                                           TSoftObjectPtr<UMinimapTileSetDataAsset> TileSet = TSoftObjectPtr<UMinimapTileSetDataAsset>());
 	UMinimapTileSetDataAsset* CreateOrUpdateTileSetAsset();
 	bool SaveAssetPackage(UPackage* Package, UObject* Asset);
+	void ScheduleDelayedMemoryTrace(const FString& Detail);
 	void CleanupCaptureResources();
-	void ReleaseCaptureResources(bool bFlushRendering);
+	bool CanRunExplicitGarbageCleanup() const;
+	void ReleaseCaptureResources(bool bFlushRendering, bool bAllowBeginDestroy = true);
 	void PrepareTileTextureForUnload(UTexture2D* Texture, UPackage* Package);
 	void ReleaseTileImportPackage(UPackage* Package, UTexture2D* Texture, const FString& AssetPath);
 	void RetryUnloadPendingTilePackages();
-	void ReleaseWorkingMemory(bool bFinalCleanup);
+	void ReleaseWorkingMemory(bool bFinalCleanup, bool bAllowExplicitGC = true);
+	void ScanDeferredTileAssetFiles(const TArray<FString>& PackageFiles);
 	void ResetMemoryCleanupPolicy();
 	void MaybeRunTileSetMemoryMaintenance(const TCHAR* Reason);
 	void RunTileSetMemoryMaintenance(const TCHAR* Reason, bool bFlushRendering);
@@ -242,8 +256,8 @@ private:
 	/** Create and configure the Render Target to draw to. */
 	UTextureRenderTarget2D* CreateRenderTarget();
 
-	/** Spawn, configure, and position the Scene Capture Actor. */
-	ASceneCapture2D* SpawnAndConfigureCaptureActor(UTextureRenderTarget2D* RenderTarget);
+	/** Create, register, configure, and position the transient Scene Capture component. */
+	USceneCaptureComponent2D* CreateAndConfigureCaptureComponent(UTextureRenderTarget2D* RenderTarget);
 
 	/** Called by Timer to read pixels, clean up, and start saving. */
 	void ReadPixelsAndFinalize();
@@ -302,6 +316,7 @@ private:
 	TArray<FMinimapTilePyramidLevel> TileSetExportLevels;
 	int32 CurrentTileLOD = 0;
 	FIntPoint CurrentTileSetGrid = FIntPoint::ZeroValue;
+	TArray<FString> DeferredTileAssetScanFiles;
 	struct FMinimapMemoryCleanupPolicy
 	{
 		int32 TilesSinceLastGC = 0;
@@ -309,11 +324,11 @@ private:
 		uint64 LastGCUsedPhysical = 0;
 		uint64 LastGCAvailablePhysical = 0;
 		double LastGCTimeSeconds = 0.0;
-		int32 MinTilesBetweenGC = 12;
-		int32 MaxTilesBetweenGC = 24;
-		uint64 UsedGrowthTriggerBytes = 384ull * 1024ull * 1024ull;
-		uint64 AvailableDropTriggerBytes = 512ull * 1024ull * 1024ull;
-		double MinSecondsBetweenGC = 2.0;
+		int32 MinTilesBetweenGC = 2;
+		int32 MaxTilesBetweenGC = 4;
+		uint64 UsedGrowthTriggerBytes = 192ull * 1024ull * 1024ull;
+		uint64 AvailableDropTriggerBytes = 256ull * 1024ull * 1024ull;
+		double MinSecondsBetweenGC = 0.5;
 	};
 	FMinimapMemoryCleanupPolicy MemoryCleanupPolicy;
 	FMinimapCaptureTelemetry Telemetry;
@@ -336,8 +351,12 @@ private:
 	bool bIsSingleCaptureMode = false;
 	bool bCancelRequested = false;
 	bool bIsShuttingDown = false;
+	bool bInBeginDestroy = false;
 
-	TWeakObjectPtr<ASceneCapture2D> ActiveCaptureActor;
-	TWeakObjectPtr<UTextureRenderTarget2D> ActiveRenderTarget;
+	UPROPERTY(Transient)
+	TObjectPtr<USceneCaptureComponent2D> ActiveCaptureComponent = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureRenderTarget2D> ActiveRenderTarget = nullptr;
 
 };

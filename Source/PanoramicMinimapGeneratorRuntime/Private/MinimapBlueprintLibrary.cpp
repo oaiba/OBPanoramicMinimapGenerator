@@ -130,7 +130,15 @@ bool UMinimapBlueprintLibrary::WorldLocationToTileCoord(const UMinimapDefinition
                                                         FMinimapTileCoord& OutCoord, FVector2D& OutTileUV,
                                                         const bool bClampToBounds)
 {
-	if (!MinimapDefinition || !MinimapDefinition->TileSet)
+	if (!MinimapDefinition || MinimapDefinition->TileSet.IsNull())
+	{
+		OutCoord = FMinimapTileCoord();
+		OutTileUV = FVector2D::ZeroVector;
+		return false;
+	}
+
+	const UMinimapTileSetDataAsset* TileSet = MinimapDefinition->TileSet.LoadSynchronous();
+	if (!TileSet)
 	{
 		OutCoord = FMinimapTileCoord();
 		OutTileUV = FVector2D::ZeroVector;
@@ -138,7 +146,7 @@ bool UMinimapBlueprintLibrary::WorldLocationToTileCoord(const UMinimapDefinition
 	}
 
 	const FVector2D MapUV = WorldLocationToMapUV(MinimapDefinition, WorldLocation, bClampToBounds);
-	return MapUVToTileCoord(MinimapDefinition->TileSet, MapUV, LOD, OutCoord, OutTileUV, bClampToBounds);
+	return MapUVToTileCoord(TileSet, MapUV, LOD, OutCoord, OutTileUV, bClampToBounds);
 }
 
 void UMinimapBlueprintLibrary::GetTilesIntersectingUVRect(const UMinimapTileSetDataAsset* TileSet, FVector2D UVMin,

@@ -33,7 +33,9 @@
 #include "HAL/PlatformMemory.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/ConfigCacheIni.h"
+#include "UObject/UObjectGlobals.h"
 
 #define LOCTEXT_NAMESPACE "SMinimapGeneratorWindow"
 
@@ -41,6 +43,57 @@ namespace
 {
 constexpr int64 MaxPreviewPixels = 4096LL * 4096LL;
 constexpr double MemoryStatsRefreshIntervalSeconds = 1.0;
+
+bool IsPanoramicMemoryTraceEnabledForWindow()
+{
+	if (const IConsoleVariable* MemoryTraceCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("OB.Panoramic.MemoryTrace")))
+	{
+		return MemoryTraceCVar->GetInt() != 0;
+	}
+
+	return false;
+}
+
+FString FormatWindowTraceBytes(const uint64 Bytes)
+{
+	constexpr double OneGB = 1024.0 * 1024.0 * 1024.0;
+	constexpr double OneMB = 1024.0 * 1024.0;
+	if (Bytes >= static_cast<uint64>(OneGB))
+	{
+		return FString::Printf(TEXT("%.2f GB"), static_cast<double>(Bytes) / OneGB);
+	}
+
+	return FString::Printf(TEXT("%.0f MB"), static_cast<double>(Bytes) / OneMB);
+}
+
+void TraceWindowMemory(const TCHAR* Keyword, const FString& Detail)
+{
+	if (!IsPanoramicMemoryTraceEnabledForWindow())
+	{
+		return;
+	}
+
+	const FPlatformMemoryStats Stats = FPlatformMemory::GetStats();
+	UE_LOG(OBPanoramicMinimapGenerator, Log,
+		TEXT("[PANOMEM][%s] %s | Avail=%s Used=%s Peak=%s Total=%s"),
+		Keyword,
+		*Detail,
+		*FormatWindowTraceBytes(Stats.AvailablePhysical),
+		*FormatWindowTraceBytes(Stats.UsedPhysical),
+		*FormatWindowTraceBytes(Stats.PeakUsedPhysical),
+		*FormatWindowTraceBytes(Stats.TotalPhysical));
+}
+
+void CollectGarbageIfLifecycleSafeForWindow(const TCHAR* Reason)
+{
+	if (IsEngineExitRequested() || IsGarbageCollecting())
+	{
+		TraceWindowMemory(TEXT("GC_SKIPPED_UNSAFE_LIFECYCLE"), FString::Printf(TEXT("Reason=%s"), Reason ? Reason : TEXT("Unknown")));
+		return;
+	}
+
+	CollectGarbage(RF_NoFlags);
+}
 }
 
 void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
@@ -1211,9 +1264,42 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 			ImageContainer->SetVisibility(EVisibility::Collapsed);
 			ImageInfoText->SetText(FText::Format(LOCTEXT("ImageInfoPreviewSkipped", "{0}x{1} • {2} • PNG • preview skipped"),
 				*CurrentOutputWidth, *CurrentOutputHeight, FText::FromString(FileSizeStr)));
-			CollectGarbage(RF_NoFlags);
+			TraceWindowMemory(TEXT("AFTER_UI_PREVIEW_DECISION"), FString::Printf(
+				TEXT("Preview=SkippedTooLarge Path=%s Pixels=%lld MaxPixels=%lld"),
+				*FinalImagePath,
+				PreviewPixels,
+				MaxPreviewPixels));
+			CollectGarbageIfLifecycleSafeForWindow(TEXT("PreviewSkippedTooLarge"));
 			return;
 		}
+
+		const FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
+		const FPlatformMemoryStats::EMemoryPressureStatus PressureStatus = MemoryStats.GetMemoryPressureStatus();
+		const double AvailableRatio = MemoryStats.TotalPhysical > 0
+			                              ? static_cast<double>(MemoryStats.AvailablePhysical) / static_cast<double>(MemoryStats.TotalPhysical)
+			                              : 1.0;
+		const bool bSkipPreviewForMemory = PressureStatus == FPlatformMemoryStats::EMemoryPressureStatus::Warning
+			|| PressureStatus == FPlatformMemoryStats::EMemoryPressureStatus::Critical
+			|| AvailableRatio < 0.25;
+		if (bSkipPreviewForMemory)
+		{
+			ReleasePreviewResources();
+			OpenFolderButton->SetVisibility(EVisibility::Visible);
+			ImageContainer->SetVisibility(EVisibility::Collapsed);
+			ImageInfoText->SetText(FText::Format(LOCTEXT("ImageInfoPreviewSkippedMemory", "{0}x{1} • {2} • PNG • preview skipped due to memory pressure"),
+				*CurrentOutputWidth, *CurrentOutputHeight, FText::FromString(FileSizeStr)));
+			TraceWindowMemory(TEXT("AFTER_UI_PREVIEW_DECISION"), FString::Printf(
+				TEXT("Preview=SkippedMemoryPressure Path=%s AvailableRatio=%.3f Pressure=%s"),
+				*FinalImagePath,
+				AvailableRatio,
+				*FormatMemoryPressureStatus(PressureStatus).ToString()));
+			CollectGarbageIfLifecycleSafeForWindow(TEXT("PreviewSkippedMemoryPressure"));
+			return;
+		}
+
+		TraceWindowMemory(TEXT("AFTER_UI_PREVIEW_DECISION"), FString::Printf(TEXT("Preview=LoadAsync Path=%s Pixels=%lld"),
+			*FinalImagePath,
+			PreviewPixels));
 
 		// Load and decompress the PNG on a background thread to avoid freezing the editor.
 		// A 4096x4096 PNG can take 2-5 seconds to decompress — doing this on the game thread
@@ -1295,6 +1381,10 @@ void SMinimapGeneratorWindow::HandleCaptureCompleted(bool bSuccess, const FStrin
 				StrongThis->PreviewSwitcher->SetActiveWidgetIndex(0);
 
 				StrongThis->ImageContainer->SetVisibility(EVisibility::Visible);
+				TraceWindowMemory(TEXT("AFTER_UI_PREVIEW_DECISION"), FString::Printf(TEXT("Preview=Displayed Path=%s Size=%dx%d"),
+					*ImagePath,
+					PreviewWidth,
+					PreviewHeight));
 
 				UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("Successfully loaded and displayed preview image from %s (async)."), *ImagePath);
 			});
@@ -1762,7 +1852,7 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	{
 		ImageContainer->SetVisibility(EVisibility::Collapsed);
 	}
-	CollectGarbage(RF_NoFlags);
+	CollectGarbageIfLifecycleSafeForWindow(TEXT("StartCaptureReleasePreview"));
 
 	// Validation
 	const FVector MinBounds(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue());
@@ -1825,7 +1915,6 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 	else if (Settings.bExportDefinitionAsset)
 	{
 		Settings.DefinitionAssetPath = DefinitionAssetPathTextBox->GetText().ToString();
-		Settings.bImportAsTextureAsset = true;
 		Settings.AssetPath = AssetPathTextBox->GetText().ToString();
 	}
 	Settings.TileResolution = TileResolution->GetValue();

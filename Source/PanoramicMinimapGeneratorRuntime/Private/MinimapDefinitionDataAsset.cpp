@@ -47,5 +47,15 @@ const FMinimapTilePyramidLevel* UMinimapTileSetDataAsset::GetPyramidLevel(const 
 
 bool UMinimapDefinitionDataAsset::IsTiledDefinition() const
 {
-	return TileSet && TileSet->IsValidTileSet();
+	if (TileSet.IsNull())
+	{
+		return false;
+	}
+
+	if (const UMinimapTileSetDataAsset* LoadedTileSet = TileSet.Get())
+	{
+		return LoadedTileSet->IsValidTileSet();
+	}
+
+	return true;
 }
