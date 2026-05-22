@@ -25,6 +25,31 @@ FVector2D ApplyRotation(FVector2D UV, float RotationDegrees)
 		Offset.X * SinAngle + Offset.Y * CosAngle);
 }
 
+FVector2D ProjectWorldToPanoramicMapUV(const UMinimapDefinitionDataAsset* MinimapDefinition,
+                                       const FVector& WorldLocation)
+{
+	const FVector BoundsMin = MinimapDefinition->WorldBounds.Min;
+	const FVector BoundsSize = MinimapDefinition->WorldBounds.GetSize();
+	const FVector2D RawUV(
+		(WorldLocation.X - BoundsMin.X) / BoundsSize.X,
+		1.0f - ((WorldLocation.Y - BoundsMin.Y) / BoundsSize.Y));
+	const FVector2D RotatedUV = ApplyRotation(RawUV, MinimapDefinition->MapRotationDegrees);
+	return FVector2D(RotatedUV.X, 1.0f - RotatedUV.Y);
+}
+
+FVector ProjectPanoramicMapUVToWorld(const UMinimapDefinitionDataAsset* MinimapDefinition,
+                                     const FVector2D& MapUV, const float WorldZ)
+{
+	const FVector2D RotatedUV(MapUV.X, 1.0f - MapUV.Y);
+	const FVector2D RawUV = ApplyRotation(RotatedUV, -MinimapDefinition->MapRotationDegrees);
+	const FVector BoundsMin = MinimapDefinition->WorldBounds.Min;
+	const FVector BoundsSize = MinimapDefinition->WorldBounds.GetSize();
+	return FVector(
+		BoundsMin.X + RawUV.X * BoundsSize.X,
+		BoundsMin.Y + (1.0f - RawUV.Y) * BoundsSize.Y,
+		WorldZ);
+}
+
 void NormalizeUVRect(const FVector2D& InA, const FVector2D& InB, FVector2D& OutMin, FVector2D& OutMax)
 {
 	OutMin = FVector2D(FMath::Min(InA.X, InB.X), FMath::Min(InA.Y, InB.Y));
@@ -88,14 +113,7 @@ FVector2D UMinimapBlueprintLibrary::WorldLocationToMapUV(const UMinimapDefinitio
 		return FVector2D::ZeroVector;
 	}
 
-	const FVector BoundsMin = MinimapDefinition->WorldBounds.Min;
-	const FVector BoundsSize = MinimapDefinition->WorldBounds.GetSize();
-
-	FVector2D UV(
-		(WorldLocation.X - BoundsMin.X) / BoundsSize.X,
-		1.0f - ((WorldLocation.Y - BoundsMin.Y) / BoundsSize.Y));
-
-	UV = ApplyRotation(UV, MinimapDefinition->MapRotationDegrees);
+	FVector2D UV = ProjectWorldToPanoramicMapUV(MinimapDefinition, WorldLocation);
 
 	if (bClampToBounds || MinimapDefinition->bClampQueriesToBounds)
 	{
@@ -130,14 +148,7 @@ FVector UMinimapBlueprintLibrary::MapUVToWorldLocation(const UMinimapDefinitionD
 		MapUV.Y = FMath::Clamp(MapUV.Y, 0.0f, 1.0f);
 	}
 
-	MapUV = ApplyRotation(MapUV, -MinimapDefinition->MapRotationDegrees);
-
-	const FVector BoundsMin = MinimapDefinition->WorldBounds.Min;
-	const FVector BoundsSize = MinimapDefinition->WorldBounds.GetSize();
-	return FVector(
-		BoundsMin.X + MapUV.X * BoundsSize.X,
-		BoundsMin.Y + (1.0f - MapUV.Y) * BoundsSize.Y,
-		WorldZ);
+	return ProjectPanoramicMapUVToWorld(MinimapDefinition, MapUV, WorldZ);
 }
 
 bool UMinimapBlueprintLibrary::MapUVToTileCoord(const UMinimapTileSetDataAsset* TileSet, FVector2D MapUV,
