@@ -111,7 +111,7 @@ FIntPoint CalculateTileSetTilePixelSize(const FVector2D& WorldTileSize, const in
 		SafeMaxPixelDimension);
 }
 
-FVector2D CalculateCaptureViewWorldSize(const FBox& CaptureBounds, const FIntPoint& OutputSize)
+FVector2D CalculateExpandedCaptureViewWorldSize(const FBox& CaptureBounds, const FIntPoint& OutputSize)
 {
 	const FVector BoundsSize = CaptureBounds.GetSize();
 	const float AspectRatio = OutputSize.Y > 0
@@ -126,6 +126,18 @@ FVector2D CalculateCaptureViewWorldSize(const FBox& CaptureBounds, const FIntPoi
 
 	const float Height = FMath::Max(BoundsSize.Y, BoundsSize.X / AspectRatio);
 	return FVector2D(Height * AspectRatio, Height);
+}
+
+FVector2D ResolveProjectionWorldSize(const FMinimapCaptureSettings& Settings)
+{
+	if (Settings.OutputAspectPolicy == EMinimapOutputAspectPolicy::MatchCaptureRegion)
+	{
+		return UMinimapGeneratorManager::CalculateCaptureRegionWorldSize(Settings.CaptureBounds, Settings.CameraRotation);
+	}
+
+	return CalculateExpandedCaptureViewWorldSize(
+		Settings.CaptureBounds,
+		FIntPoint(Settings.OutputWidth, Settings.OutputHeight));
 }
 
 FVector FlattenedSafeAxis(FVector Axis, const FVector& Fallback)
@@ -198,6 +210,67 @@ bool DoesLongPackageFileExist(const FString& LongPackageName)
 		FPackageName::GetAssetPackageExtension());
 	return IFileManager::Get().FileExists(*PackageFilename);
 }
+}
+
+FVector2D UMinimapGeneratorManager::CalculateCaptureRegionWorldSize(const FBox& CaptureBounds,
+                                                                    const FRotator& CameraRotation)
+{
+	if (!CaptureBounds.IsValid)
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	const FVector BoundsCenter = CaptureBounds.GetCenter();
+	const FVector CameraRight = FlattenedSafeAxis(FRotationMatrix(CameraRotation).GetScaledAxis(EAxis::Y), FVector::RightVector);
+	const FVector CameraUp = FlattenedSafeAxis(FRotationMatrix(CameraRotation).GetScaledAxis(EAxis::Z), FVector::ForwardVector);
+	const FVector Corners[] = {
+		FVector(CaptureBounds.Min.X, CaptureBounds.Min.Y, BoundsCenter.Z),
+		FVector(CaptureBounds.Min.X, CaptureBounds.Max.Y, BoundsCenter.Z),
+		FVector(CaptureBounds.Max.X, CaptureBounds.Min.Y, BoundsCenter.Z),
+		FVector(CaptureBounds.Max.X, CaptureBounds.Max.Y, BoundsCenter.Z)
+	};
+
+	float MinRight = TNumericLimits<float>::Max();
+	float MaxRight = TNumericLimits<float>::Lowest();
+	float MinUp = TNumericLimits<float>::Max();
+	float MaxUp = TNumericLimits<float>::Lowest();
+	for (const FVector& Corner : Corners)
+	{
+		const FVector Delta = Corner - BoundsCenter;
+		const float RightDistance = FVector::DotProduct(Delta, CameraRight);
+		const float UpDistance = FVector::DotProduct(Delta, CameraUp);
+		MinRight = FMath::Min(MinRight, RightDistance);
+		MaxRight = FMath::Max(MaxRight, RightDistance);
+		MinUp = FMath::Min(MinUp, UpDistance);
+		MaxUp = FMath::Max(MaxUp, UpDistance);
+	}
+
+	return FVector2D(
+		FMath::Max(MaxRight - MinRight, KINDA_SMALL_NUMBER),
+		FMath::Max(MaxUp - MinUp, KINDA_SMALL_NUMBER));
+}
+
+FIntPoint UMinimapGeneratorManager::CalculateAspectMatchedOutputSize(const FBox& CaptureBounds,
+                                                                     const FRotator& CameraRotation,
+                                                                     const int32 LongEdgeResolution)
+{
+	const int32 SafeLongEdge = FMath::Max(1, LongEdgeResolution);
+	const FVector2D CaptureWorldSize = CalculateCaptureRegionWorldSize(CaptureBounds, CameraRotation);
+	if (CaptureWorldSize.X <= 0.0f || CaptureWorldSize.Y <= 0.0f)
+	{
+		return FIntPoint(SafeLongEdge, SafeLongEdge);
+	}
+
+	if (CaptureWorldSize.X >= CaptureWorldSize.Y)
+	{
+		return FIntPoint(
+			SafeLongEdge,
+			FMath::Max(1, FMath::RoundToInt(static_cast<float>(SafeLongEdge) * CaptureWorldSize.Y / CaptureWorldSize.X)));
+	}
+
+	return FIntPoint(
+		FMath::Max(1, FMath::RoundToInt(static_cast<float>(SafeLongEdge) * CaptureWorldSize.X / CaptureWorldSize.Y)),
+		SafeLongEdge);
 }
 
 // =================== START OF NEW CODE ===================
@@ -423,6 +496,19 @@ void UMinimapGeneratorManager::StartCaptureProcess(const FMinimapCaptureSettings
 	bCancelRequested = false;
 	UE_LOG(OBPanoramicMinimapGenerator, Warning, TEXT("[%s::%s] - Starting minimap capture process."), *GetName(), *FString(__FUNCTION__));
 	this->Settings = InSettings;
+	if (Settings.OutputAspectPolicy == EMinimapOutputAspectPolicy::MatchCaptureRegion)
+	{
+		const int32 LongEdgeResolution = Settings.OutputLongEdge > 0
+			                                  ? Settings.OutputLongEdge
+			                                  : FMath::Max(Settings.OutputWidth, Settings.OutputHeight);
+		const FIntPoint ResolvedOutputSize = CalculateAspectMatchedOutputSize(
+			Settings.CaptureBounds,
+			Settings.CameraRotation,
+			LongEdgeResolution);
+		Settings.OutputLongEdge = FMath::Max(ResolvedOutputSize.X, ResolvedOutputSize.Y);
+		Settings.OutputWidth = ResolvedOutputSize.X;
+		Settings.OutputHeight = ResolvedOutputSize.Y;
+	}
 	TracePanoramicMemory(TEXT("CAPTURE_START_BEGIN"), FString::Printf(
 		TEXT("UseTiling=%s ExportTileSet=%s Output=%dx%d TileRes=%d TileOverlap=%d"),
 		Settings.bUseTiling ? TEXT("true") : TEXT("false"),
@@ -841,6 +927,9 @@ UMinimapDefinitionDataAsset* UMinimapGeneratorManager::CreateOrUpdateDefinitionA
 	DefinitionAsset->WorldBounds = Settings.CaptureBounds;
 	DefinitionAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
 	DefinitionAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
+	DefinitionAsset->ProjectionFrameVersion = 1;
+	DefinitionAsset->ProjectionWorldCenter = Settings.CaptureBounds.GetCenter();
+	DefinitionAsset->ProjectionWorldSize = ResolveProjectionWorldSize(Settings);
 	DefinitionAsset->OverlayLayers = Settings.OverlayLayers;
 	ApplyCaptureMetadata(DefinitionAsset);
 	DefinitionAsset->MarkPackageDirty();
@@ -872,6 +961,9 @@ UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset()
 	TileSetAsset->WorldBounds = Settings.CaptureBounds;
 	TileSetAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
 	TileSetAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
+	TileSetAsset->ProjectionFrameVersion = 1;
+	TileSetAsset->ProjectionWorldCenter = Settings.CaptureBounds.GetCenter();
+	TileSetAsset->ProjectionWorldSize = ResolveProjectionWorldSize(Settings);
 	TileSetAsset->bClampQueriesToBounds = true;
 	TileSetAsset->PyramidLevels = TileSetExportLevels;
 	TileSetAsset->OverlayLayers = Settings.OverlayLayers;
@@ -1583,23 +1675,11 @@ USceneCaptureComponent2D* UMinimapGeneratorManager::CreateAndConfigureCaptureCom
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (!World || !RenderTarget) return nullptr;
 
-	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
 	const FVector BoundsCenter = Settings.CaptureBounds.GetCenter();
 	const FVector CameraLocation = FVector(BoundsCenter.X, BoundsCenter.Y, Settings.CameraHeight);
 	const FRotator CameraRotation = Settings.CameraRotation;
-	float OutputAspectRatio;
-	float CameraOrthoWidth;
-	if (Settings.OutputWidth >= Settings.OutputHeight)
-	{
-		OutputAspectRatio = static_cast<float>(Settings.OutputWidth) / static_cast<float>(Settings.
-			OutputHeight);
-		CameraOrthoWidth = FMath::Max(BoundsSize.X, BoundsSize.Y * OutputAspectRatio);
-	}
-	else
-	{
-		OutputAspectRatio = static_cast<float>(Settings.OutputHeight) / static_cast<float>(Settings.OutputWidth);
-		CameraOrthoWidth = FMath::Max(BoundsSize.Y, BoundsSize.X / OutputAspectRatio);
-	}
+	const FVector2D CaptureWorldSize = ResolveProjectionWorldSize(Settings);
+	const float CameraOrthoWidth = FMath::Max(CaptureWorldSize.X, KINDA_SMALL_NUMBER);
 
 	USceneCaptureComponent2D* CaptureComponent = NewObject<USceneCaptureComponent2D>(
 		GetTransientPackage(),
@@ -1967,9 +2047,9 @@ void UMinimapGeneratorManager::StartTileSetCaptureProcess()
 
 void UMinimapGeneratorManager::InitializeTileSetExportLevels()
 {
-	const FVector BoundsSize = Settings.CaptureBounds.GetSize();
-	const int32 FullTilesX = FMath::Max(1, FMath::CeilToInt(BoundsSize.X / Settings.TileSetWorldTileSize));
-	const int32 FullTilesY = FMath::Max(1, FMath::CeilToInt(BoundsSize.Y / Settings.TileSetWorldTileSize));
+	const FVector2D FullCaptureWorldSize = ResolveProjectionWorldSize(Settings);
+	const int32 FullTilesX = FMath::Max(1, FMath::CeilToInt(FullCaptureWorldSize.X / Settings.TileSetWorldTileSize));
+	const int32 FullTilesY = FMath::Max(1, FMath::CeilToInt(FullCaptureWorldSize.Y / Settings.TileSetWorldTileSize));
 	const int32 MaxLOD = FMath::Clamp(Settings.TileSetMaxLOD, 0, 8);
 
 	TileSetExportLevels.Reserve(MaxLOD + 1);
@@ -1980,13 +2060,12 @@ void UMinimapGeneratorManager::InitializeTileSetExportLevels()
 			LOD == MaxLOD ? FullTilesX : FMath::Clamp(TargetGrid, 1, FullTilesX),
 			LOD == MaxLOD ? FullTilesY : FMath::Clamp(TargetGrid, 1, FullTilesY));
 		const int32 MaxTilePixels = LOD == 0 ? Settings.TileSetOverviewResolution : Settings.TileResolution;
-		const FVector2D FullCaptureWorldSize = CalculateCaptureViewWorldSize(
-			Settings.CaptureBounds,
-			FIntPoint(Settings.OutputWidth, Settings.OutputHeight));
 		const FVector2D CaptureWorldSize(
 			FullCaptureWorldSize.X / static_cast<float>(GridDimensions.X),
 			FullCaptureWorldSize.Y / static_cast<float>(GridDimensions.Y));
-		const FVector2D WorldTileSize(BoundsSize.X / GridDimensions.X, BoundsSize.Y / GridDimensions.Y);
+		const FVector2D WorldTileSize(
+			FullCaptureWorldSize.X / static_cast<float>(GridDimensions.X),
+			FullCaptureWorldSize.Y / static_cast<float>(GridDimensions.Y));
 
 		FMinimapTilePyramidLevel Level;
 		Level.LOD = LOD;
@@ -2067,9 +2146,7 @@ UMinimapGeneratorManager::FMinimapTileCaptureFrame UMinimapGeneratorManager::Bui
 
 	const FVector CameraRight = FlattenedSafeAxis(FRotationMatrix(Settings.CameraRotation).GetScaledAxis(EAxis::Y), FVector::RightVector);
 	const FVector CameraUp = FlattenedSafeAxis(FRotationMatrix(Settings.CameraRotation).GetScaledAxis(EAxis::Z), FVector::ForwardVector);
-	const FVector2D FullCaptureWorldSize = CalculateCaptureViewWorldSize(
-		Settings.CaptureBounds,
-		FIntPoint(Settings.OutputWidth, Settings.OutputHeight));
+	const FVector2D FullCaptureWorldSize = ResolveProjectionWorldSize(Settings);
 	const FVector2D UVCenter = (Frame.UVMin + Frame.UVMax) * 0.5f;
 	Frame.WorldCenter = Settings.CaptureBounds.GetCenter()
 		+ CameraRight * ((UVCenter.X - 0.5f) * FullCaptureWorldSize.X)

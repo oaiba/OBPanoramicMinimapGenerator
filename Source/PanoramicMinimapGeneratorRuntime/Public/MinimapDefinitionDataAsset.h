@@ -196,6 +196,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TileSet")
 	float MapRotationDegrees = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projection")
+	int32 ProjectionFrameVersion = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projection")
+	FVector ProjectionWorldCenter = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projection")
+	FVector2D ProjectionWorldSize = FVector2D::ZeroVector;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TileSet")
 	bool bClampQueriesToBounds = true;
 
@@ -212,6 +221,8 @@ public:
 	int32 GetMaxLOD() const;
 
 	const FMinimapTilePyramidLevel* GetPyramidLevel(int32 LOD) const;
+
+	bool ResolveProjectionFrame(FVector& OutWorldCenter, FVector2D& OutWorldSize) const;
 };
 
 UCLASS(BlueprintType)
@@ -268,6 +279,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap")
 	float MapRotationDegrees = 0.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projection")
+	int32 ProjectionFrameVersion = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projection")
+	FVector ProjectionWorldCenter = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Projection")
+	FVector2D ProjectionWorldSize = FVector2D::ZeroVector;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap")
 	bool bClampQueriesToBounds = true;
 
@@ -276,4 +296,6 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Minimap")
 	bool IsTiledDefinition() const;
+
+	bool ResolveProjectionFrame(FVector& OutWorldCenter, FVector2D& OutWorldSize) const;
 };

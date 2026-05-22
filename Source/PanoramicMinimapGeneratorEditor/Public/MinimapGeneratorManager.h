@@ -18,6 +18,16 @@ enum class EMinimapBackgroundMode : uint8
 	SolidColor UMETA(DisplayName = "Solid Color"),
 };
 
+UENUM(BlueprintType)
+enum class EMinimapOutputAspectPolicy : uint8
+{
+	/** Presets define the long edge; the short edge is derived from the capture region aspect ratio. */
+	MatchCaptureRegion UMETA(DisplayName = "Match Capture Region Aspect"),
+
+	/** OutputWidth and OutputHeight are used exactly, preserving the previous square/custom behavior. */
+	ManualOutputSize UMETA(DisplayName = "Manual Output Size")
+};
+
 // Struct to hold all capture settings, easily passed around and exposed to UI/BP
 USTRUCT(BlueprintType)
 struct FMinimapCaptureSettings
@@ -32,6 +42,12 @@ struct FMinimapCaptureSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
 	int32 OutputHeight = 4096;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
+	EMinimapOutputAspectPolicy OutputAspectPolicy = EMinimapOutputAspectPolicy::MatchCaptureRegion;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Output")
+	int32 OutputLongEdge = 4096;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tiling")
 	bool bUseTiling = false;
@@ -204,6 +220,10 @@ public:
 	// Starts the entire capture and stitching process
 	void StartCaptureProcess(const FMinimapCaptureSettings& InSettings);
 	void StartSingleCaptureForValidation();
+
+	static FVector2D CalculateCaptureRegionWorldSize(const FBox& CaptureBounds, const FRotator& CameraRotation);
+	static FIntPoint CalculateAspectMatchedOutputSize(const FBox& CaptureBounds, const FRotator& CameraRotation,
+	                                                  int32 LongEdgeResolution);
 
 	// Delegate for UI updates
 	FOnMinimapProgress OnProgress;

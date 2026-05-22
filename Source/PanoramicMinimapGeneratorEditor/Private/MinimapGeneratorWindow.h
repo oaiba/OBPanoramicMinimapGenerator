@@ -95,8 +95,13 @@ private:
 	TSharedPtr<SComboBox<TSharedPtr<int32>>> OutputHeightComboBox;
 	TSharedPtr<int32> CurrentOutputWidth;
 	TSharedPtr<int32> CurrentOutputHeight;
+	TSharedPtr<SCheckBox> MatchCaptureAspectCheckbox;
 	void OnOutputWidthChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo);
 	void OnOutputHeightChanged(TSharedPtr<int32> NewSelection, ESelectInfo::Type SelectInfo);
+	FBox GetCurrentCaptureBoundsInput() const;
+	FRotator GetCurrentCameraRotationInput() const;
+	FIntPoint GetResolvedOutputSizePreview() const;
+	FText GetResolvedOutputSizeText() const;
 	
 	// Presets
 	FReply OnResolutionPresetClicked(int32 Res);

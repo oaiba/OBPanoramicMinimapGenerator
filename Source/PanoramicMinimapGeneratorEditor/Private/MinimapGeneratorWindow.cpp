@@ -879,8 +879,18 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 					.BodyContent()
 					[
 						SNew(SGridPanel).FillColumn(1, 1.0f)
+						+ SGridPanel::Slot(1, 0).Padding(0, 0, 0, 8)
+						[
+							SAssignNew(MatchCaptureAspectCheckbox, SCheckBox)
+							.IsChecked(ECheckBoxState::Checked)
+							[
+								SNew(STextBlock)
+								.Text(LOCTEXT("MatchCaptureAspectLabel", "Match Capture Region Aspect"))
+								.ToolTipText(LOCTEXT("MatchCaptureAspectTooltip", "When enabled, presets set the long edge and the short edge is derived from the selected capture region. Disable to use Output Width and Output Height exactly."))
+							]
+						]
 						// --- PRESETS ---
-						+ SGridPanel::Slot(1, 0).Padding(0, 0, 0, 10)
+						+ SGridPanel::Slot(1, 1).Padding(0, 0, 0, 10)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0)
@@ -900,11 +910,11 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								SNew(SButton).Text(LOCTEXT("Preset8192", "8192 (Ultra)")).OnClicked(this, &SMinimapGeneratorWindow::OnResolutionPresetClicked, 8192)
 							]
 						]
-						+ SGridPanel::Slot(0, 1).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 2).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("OutputWidthLabel", "Output Width"))
 						]
-						+ SGridPanel::Slot(1, 1)
+						+ SGridPanel::Slot(1, 2)
 						[
 							SAssignNew(OutputWidthComboBox, SComboBox<TSharedPtr<int32>>)
 							.OptionsSource(&ResolutionOptions)
@@ -917,11 +927,11 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								SNew(STextBlock).Text_Lambda([this] { return FText::AsNumber(*CurrentOutputWidth); })
 							]
 						]
-						+ SGridPanel::Slot(0, 2).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("OutputHeightLabel", "Output Height"))
 						]
-						+ SGridPanel::Slot(1, 2)
+						+ SGridPanel::Slot(1, 3)
 						[
 							SAssignNew(OutputHeightComboBox, SComboBox<TSharedPtr<int32>>)
 							.OptionsSource(&ResolutionOptions)
@@ -934,11 +944,20 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								SNew(STextBlock).Text_Lambda([this] { return FText::AsNumber(*CurrentOutputHeight); })
 							]
 						]
-						+ SGridPanel::Slot(0, 3).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 4).HAlign(HAlign_Right).Padding(LabelPadding)
+						[
+							SNew(STextBlock).Text(LOCTEXT("ResolvedOutputLabel", "Resolved Output"))
+						]
+						+ SGridPanel::Slot(1, 4).Padding(0, 2)
+						[
+							SNew(STextBlock)
+							.Text(this, &SMinimapGeneratorWindow::GetResolvedOutputSizeText)
+						]
+						+ SGridPanel::Slot(0, 5).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("OutputPathLabel", "Output Path"))
 						]
-						+ SGridPanel::Slot(1, 3)
+						+ SGridPanel::Slot(1, 5)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().FillWidth(1.0f)
@@ -951,15 +970,15 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 									this, &SMinimapGeneratorWindow::OnBrowseButtonClicked)
 							]
 						]
-						+ SGridPanel::Slot(0, 4).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 6).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("FileNameLabel", "File Name"))
 						]
-						+ SGridPanel::Slot(1, 4)
+						+ SGridPanel::Slot(1, 6)
 						[
 							SAssignNew(FileName, SEditableTextBox).Text(LOCTEXT("DefaultFileName", "Minimap_Result"))
 						]
-						+ SGridPanel::Slot(1, 5)
+						+ SGridPanel::Slot(1, 7)
 						[
 							SAssignNew(AutoFilenameCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
 							[
@@ -967,50 +986,50 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								                              "Auto-Generate Filename with Timestamp"))
 							]
 						]
-						+ SGridPanel::Slot(1, 6) // Additional slot for checkbox
+						+ SGridPanel::Slot(1, 8) // Additional slot for checkbox
 						[
 							SAssignNew(ImportAsAssetCheckbox, SCheckBox).IsChecked(ECheckBoxState::Unchecked)
 							[
 								SNew(STextBlock).Text(LOCTEXT("ImportAsAssetLabel", "Import as Texture Asset"))
 							]
 						]
-						+ SGridPanel::Slot(0, 7).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 9).HAlign(HAlign_Right).Padding(LabelPadding)
 						// Additional slot for path label
 						[
 							SNew(STextBlock)
 							.Text(LOCTEXT("AssetPathLabel", "Asset Path"))
 							.Visibility(this, &SMinimapGeneratorWindow::GetAssetPathVisibility)
 						]
-						+ SGridPanel::Slot(1, 7) // Additional slot for path text box
+						+ SGridPanel::Slot(1, 9) // Additional slot for path text box
 						[
 							SAssignNew(AssetPathTextBox, SEditableTextBox)
 							.Text(FText::FromString(TEXT("/Game/Minimaps/")))
 							.Visibility(this, &SMinimapGeneratorWindow::GetAssetPathVisibility)
 						]
-						+ SGridPanel::Slot(1, 8)
+						+ SGridPanel::Slot(1, 10)
 						[
 							SAssignNew(ExportDefinitionAssetCheckbox, SCheckBox).IsChecked(ECheckBoxState::Checked)
 							[
 								SNew(STextBlock).Text(LOCTEXT("ExportDefinitionAssetLabel", "Export Runtime Minimap DataAsset"))
 							]
 						]
-						+ SGridPanel::Slot(0, 9).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 11).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock)
 							.Text(LOCTEXT("DefinitionAssetPathLabel", "DataAsset Path"))
 							.Visibility(this, &SMinimapGeneratorWindow::GetDefinitionAssetPathVisibility)
 						]
-						+ SGridPanel::Slot(1, 9)
+						+ SGridPanel::Slot(1, 11)
 						[
 							SAssignNew(DefinitionAssetPathTextBox, SEditableTextBox)
 							.Text(FText::FromString(TEXT("/Game/Minimaps/")))
 							.Visibility(this, &SMinimapGeneratorWindow::GetDefinitionAssetPathVisibility)
 						]
-						+ SGridPanel::Slot(0, 10).HAlign(HAlign_Right).Padding(LabelPadding)
+						+ SGridPanel::Slot(0, 12).HAlign(HAlign_Right).Padding(LabelPadding)
 						[
 							SNew(STextBlock).Text(LOCTEXT("BackgroundModeLabel", "Background Mode"))
 						]
-						+ SGridPanel::Slot(1, 10)
+						+ SGridPanel::Slot(1, 12)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 10, 0)
@@ -1038,7 +1057,7 @@ void SMinimapGeneratorWindow::Construct(const FArguments& InArgs)
 								]
 							]
 						]
-						+ SGridPanel::Slot(1, 11).Padding(0, 5, 0, 5)
+						+ SGridPanel::Slot(1, 13).Padding(0, 5, 0, 5)
 						[
 							SNew(SColorBlock)
 							.Color(this, &SMinimapGeneratorWindow::GetSelectedBackgroundColor)
@@ -1753,6 +1772,69 @@ void SMinimapGeneratorWindow::OnOutputHeightChanged(TSharedPtr<int32> NewSelecti
 	if (NewSelection.IsValid()) CurrentOutputHeight = NewSelection;
 }
 
+FBox SMinimapGeneratorWindow::GetCurrentCaptureBoundsInput() const
+{
+	if (!BoundsMinX || !BoundsMinY || !BoundsMinZ || !BoundsMaxX || !BoundsMaxY || !BoundsMaxZ)
+	{
+		return FBox(ForceInit);
+	}
+
+	return FBox(
+		FVector(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue()),
+		FVector(BoundsMaxX->GetValue(), BoundsMaxY->GetValue(), BoundsMaxZ->GetValue()));
+}
+
+FRotator SMinimapGeneratorWindow::GetCurrentCameraRotationInput() const
+{
+	if (!RotationPitchSpinBox || !RotationYawSpinBox || !RotationRollSpinBox)
+	{
+		return FRotator(-90.0f, 0.0f, -180.0f);
+	}
+
+	return FRotator(
+		RotationPitchSpinBox->GetValue(),
+		RotationYawSpinBox->GetValue(),
+		RotationRollSpinBox->GetValue());
+}
+
+FIntPoint SMinimapGeneratorWindow::GetResolvedOutputSizePreview() const
+{
+	if (!CurrentOutputWidth.IsValid() || !CurrentOutputHeight.IsValid())
+	{
+		return FIntPoint::ZeroValue;
+	}
+
+	const bool bMatchCaptureAspect = MatchCaptureAspectCheckbox.IsValid()
+		&& MatchCaptureAspectCheckbox->IsChecked();
+	if (!bMatchCaptureAspect)
+	{
+		return FIntPoint(*CurrentOutputWidth, *CurrentOutputHeight);
+	}
+
+	return UMinimapGeneratorManager::CalculateAspectMatchedOutputSize(
+		GetCurrentCaptureBoundsInput(),
+		GetCurrentCameraRotationInput(),
+		FMath::Max(*CurrentOutputWidth, *CurrentOutputHeight));
+}
+
+FText SMinimapGeneratorWindow::GetResolvedOutputSizeText() const
+{
+	const FIntPoint ResolvedOutputSize = GetResolvedOutputSizePreview();
+	if (ResolvedOutputSize.X <= 0 || ResolvedOutputSize.Y <= 0)
+	{
+		return LOCTEXT("ResolvedOutputInvalid", "Invalid bounds");
+	}
+
+	const bool bMatchCaptureAspect = MatchCaptureAspectCheckbox.IsValid()
+		&& MatchCaptureAspectCheckbox->IsChecked();
+	const FString ModeLabel = bMatchCaptureAspect ? TEXT("match aspect") : TEXT("manual");
+	return FText::FromString(FString::Printf(
+		TEXT("%d x %d (%s)"),
+		ResolvedOutputSize.X,
+		ResolvedOutputSize.Y,
+		*ModeLabel));
+}
+
 EVisibility SMinimapGeneratorWindow::GetAssetPathVisibility() const
 {
 	const bool bNeedsAssetPath = ImportAsAssetCheckbox->IsChecked()
@@ -1919,8 +2001,26 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		FVector(BoundsMinX->GetValue(), BoundsMinY->GetValue(), BoundsMinZ->GetValue()),
 		FVector(BoundsMaxX->GetValue(), BoundsMaxY->GetValue(), BoundsMaxZ->GetValue())
 	);
-	Settings.OutputWidth = *CurrentOutputWidth;
-	Settings.OutputHeight = *CurrentOutputHeight;
+	// Note FRotator constructor argument order: (Pitch, Yaw, Roll).
+	Settings.CameraRotation = FRotator(
+		RotationPitchSpinBox->GetValue(),
+		RotationYawSpinBox->GetValue(),
+		RotationRollSpinBox->GetValue()
+	);
+	const bool bMatchCaptureAspect = MatchCaptureAspectCheckbox.IsValid()
+		&& MatchCaptureAspectCheckbox->IsChecked();
+	Settings.OutputAspectPolicy = bMatchCaptureAspect
+		                              ? EMinimapOutputAspectPolicy::MatchCaptureRegion
+		                              : EMinimapOutputAspectPolicy::ManualOutputSize;
+	Settings.OutputLongEdge = FMath::Max(*CurrentOutputWidth, *CurrentOutputHeight);
+	const FIntPoint ResolvedOutputSize = bMatchCaptureAspect
+		                                     ? UMinimapGeneratorManager::CalculateAspectMatchedOutputSize(
+			                                     Settings.CaptureBounds,
+			                                     Settings.CameraRotation,
+			                                     Settings.OutputLongEdge)
+		                                     : FIntPoint(*CurrentOutputWidth, *CurrentOutputHeight);
+	Settings.OutputWidth = ResolvedOutputSize.X;
+	Settings.OutputHeight = ResolvedOutputSize.Y;
 	Settings.OutputPath = OutputPath->GetText().ToString();
 	Settings.FileName = FileName->GetText().ToString();
 	Settings.BackgroundMode = CurrentBackgroundMode;
@@ -1957,12 +2057,6 @@ FReply SMinimapGeneratorWindow::OnStartCaptureClicked()
 		Settings.TileSetOverviewResolution = TileSetOverviewResolution.IsValid() ? TileSetOverviewResolution->GetValue() : 1024;
 	}
 	Settings.CameraHeight = CameraHeight->GetValue();
-	// Note FRotator constructor argument order: (Pitch, Yaw, Roll).
-	Settings.CameraRotation = FRotator(
-		RotationPitchSpinBox->GetValue(),
-		RotationYawSpinBox->GetValue(),
-		RotationRollSpinBox->GetValue()
-	);
 	Settings.bIsOrthographic = IsOrthographicCheckbox->IsChecked();
 	Settings.CameraFOV = CameraFOV->GetValue();
 	Settings.bCaptureDynamicShadows = CaptureDynamicShadowsCheckbox->IsChecked();
@@ -2021,6 +2115,9 @@ void SMinimapGeneratorWindow::SaveSettings() const
 
 	GConfig->SetInt(*Section, TEXT("OutputWidth"), *CurrentOutputWidth, ConfigPath);
 	GConfig->SetInt(*Section, TEXT("OutputHeight"), *CurrentOutputHeight, ConfigPath);
+	GConfig->SetBool(*Section, TEXT("MatchCaptureAspect"),
+	                 MatchCaptureAspectCheckbox.IsValid() && MatchCaptureAspectCheckbox->IsChecked(),
+	                 ConfigPath);
 	GConfig->SetString(*Section, TEXT("OutputPath"), *OutputPath->GetText().ToString(), ConfigPath);
 	GConfig->SetString(*Section, TEXT("FileName"), *FileName->GetText().ToString(), ConfigPath);
 	GConfig->SetBool(*Section, TEXT("AutoFilename"), AutoFilenameCheckbox->IsChecked(), ConfigPath);
@@ -2090,6 +2187,10 @@ void SMinimapGeneratorWindow::LoadSettings()
 		{
 			if (*Res == IntVal) { CurrentOutputHeight = Res; OutputHeightComboBox->SetSelectedItem(Res); break; }
 		}
+	}
+	if (GConfig->GetBool(*Section, TEXT("MatchCaptureAspect"), bBoolVal, ConfigPath) && MatchCaptureAspectCheckbox.IsValid())
+	{
+		MatchCaptureAspectCheckbox->SetIsChecked(bBoolVal ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
 	}
 
 	if (GConfig->GetString(*Section, TEXT("OutputPath"), StringVal, ConfigPath)) OutputPath->SetText(FText::FromString(StringVal));
