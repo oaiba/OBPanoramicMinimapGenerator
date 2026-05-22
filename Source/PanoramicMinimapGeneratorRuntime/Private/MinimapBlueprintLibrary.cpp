@@ -24,6 +24,61 @@ FVector2D ApplyRotation(FVector2D UV, float RotationDegrees)
 		Offset.X * CosAngle - Offset.Y * SinAngle,
 		Offset.X * SinAngle + Offset.Y * CosAngle);
 }
+
+void NormalizeUVRect(const FVector2D& InA, const FVector2D& InB, FVector2D& OutMin, FVector2D& OutMax)
+{
+	OutMin = FVector2D(FMath::Min(InA.X, InB.X), FMath::Min(InA.Y, InB.Y));
+	OutMax = FVector2D(FMath::Max(InA.X, InB.X), FMath::Max(InA.Y, InB.Y));
+}
+
+bool UVRectContainsPoint(const FVector2D& RectMin, const FVector2D& RectMax, const FVector2D& Point)
+{
+	return Point.X >= RectMin.X && Point.X <= RectMax.X && Point.Y >= RectMin.Y && Point.Y <= RectMax.Y;
+}
+
+bool UVRectsIntersect(const FVector2D& AMin, const FVector2D& AMax, const FVector2D& BMin, const FVector2D& BMax)
+{
+	return AMin.X <= BMax.X && AMax.X >= BMin.X && AMin.Y <= BMax.Y && AMax.Y >= BMin.Y;
+}
+
+bool DoesTileUVMatchGridRect(const FMinimapTileRef& Tile, const FIntPoint& GridDimensions)
+{
+	if (GridDimensions.X <= 0 || GridDimensions.Y <= 0)
+	{
+		return true;
+	}
+
+	const FVector2D ExpectedMin(
+		static_cast<float>(Tile.Coord.X) / static_cast<float>(GridDimensions.X),
+		static_cast<float>(Tile.Coord.Y) / static_cast<float>(GridDimensions.Y));
+	const FVector2D ExpectedMax(
+		static_cast<float>(Tile.Coord.X + 1) / static_cast<float>(GridDimensions.X),
+		static_cast<float>(Tile.Coord.Y + 1) / static_cast<float>(GridDimensions.Y));
+	return Tile.UVMin.Equals(ExpectedMin, 0.001f) && Tile.UVMax.Equals(ExpectedMax, 0.001f);
+}
+
+void WarnIfTileUVDoesNotMatchGrid(const UMinimapTileSetDataAsset* TileSet, const FMinimapTileRef& Tile,
+                                  const FIntPoint& GridDimensions)
+{
+	static TSet<FString> WarnedTiles;
+	if (DoesTileUVMatchGridRect(Tile, GridDimensions))
+	{
+		return;
+	}
+
+	const FString TileKey = FString::Printf(TEXT("%s:%d:%d:%d"),
+		TileSet ? *TileSet->GetPathName() : TEXT("None"), Tile.Coord.LOD, Tile.Coord.X, Tile.Coord.Y);
+	if (WarnedTiles.Contains(TileKey))
+	{
+		return;
+	}
+
+	WarnedTiles.Add(TileKey);
+	UE_LOG(LogTemp, Warning,
+	       TEXT("Panoramic tile UV does not match coord-grid rect. TileSet='%s' LOD=%d X=%d Y=%d Grid=%dx%d UVMin=%s UVMax=%s"),
+	       TileSet ? *TileSet->GetPathName() : TEXT("None"), Tile.Coord.LOD, Tile.Coord.X, Tile.Coord.Y,
+	       GridDimensions.X, GridDimensions.Y, *Tile.UVMin.ToString(), *Tile.UVMax.ToString());
+}
 }
 
 FVector2D UMinimapBlueprintLibrary::WorldLocationToMapUV(const UMinimapDefinitionDataAsset* MinimapDefinition, const FVector WorldLocation, const bool bClampToBounds)
@@ -114,15 +169,26 @@ bool UMinimapBlueprintLibrary::MapUVToTileCoord(const UMinimapTileSetDataAsset* 
 		return false;
 	}
 
-	const FVector2D ScaledUV(
-		MapUV.X * static_cast<float>(Level->GridDimensions.X),
-		MapUV.Y * static_cast<float>(Level->GridDimensions.Y));
+	for (const FMinimapTileRef& Tile : Level->Tiles)
+	{
+		FVector2D TileUVMin;
+		FVector2D TileUVMax;
+		NormalizeUVRect(Tile.UVMin, Tile.UVMax, TileUVMin, TileUVMax);
+		if (!UVRectContainsPoint(TileUVMin, TileUVMax, MapUV))
+		{
+			continue;
+		}
 
-	OutCoord.X = FMath::Clamp(FMath::FloorToInt(ScaledUV.X), 0, Level->GridDimensions.X - 1);
-	OutCoord.Y = FMath::Clamp(FMath::FloorToInt(ScaledUV.Y), 0, Level->GridDimensions.Y - 1);
-	OutTileUV = FVector2D(ScaledUV.X - OutCoord.X, ScaledUV.Y - OutCoord.Y);
+		WarnIfTileUVDoesNotMatchGrid(TileSet, Tile, Level->GridDimensions);
+		const FVector2D TileUVExtent = TileUVMax - TileUVMin;
+		OutCoord = Tile.Coord;
+		OutTileUV = FVector2D(
+			TileUVExtent.X > KINDA_SMALL_NUMBER ? (MapUV.X - TileUVMin.X) / TileUVExtent.X : 0.0f,
+			TileUVExtent.Y > KINDA_SMALL_NUMBER ? (MapUV.Y - TileUVMin.Y) / TileUVExtent.Y : 0.0f);
+		return true;
+	}
 
-	return Level->FindTile(OutCoord.X, OutCoord.Y) != nullptr;
+	return false;
 }
 
 bool UMinimapBlueprintLibrary::WorldLocationToTileCoord(const UMinimapDefinitionDataAsset* MinimapDefinition,
@@ -167,14 +233,11 @@ void UMinimapBlueprintLibrary::GetTilesIntersectingUVRect(const UMinimapTileSetD
 		return;
 	}
 
-	if (UVMin.X > UVMax.X)
-	{
-		Swap(UVMin.X, UVMax.X);
-	}
-	if (UVMin.Y > UVMax.Y)
-	{
-		Swap(UVMin.Y, UVMax.Y);
-	}
+	FVector2D QueryUVMin;
+	FVector2D QueryUVMax;
+	NormalizeUVRect(UVMin, UVMax, QueryUVMin, QueryUVMax);
+	UVMin = QueryUVMin;
+	UVMax = QueryUVMax;
 
 	if (bClampToBounds || TileSet->bClampQueriesToBounds)
 	{
@@ -184,18 +247,30 @@ void UMinimapBlueprintLibrary::GetTilesIntersectingUVRect(const UMinimapTileSetD
 		UVMax.Y = FMath::Clamp(UVMax.Y, 0.0f, 1.0f);
 	}
 
-	const int32 MinX = FMath::Clamp(FMath::FloorToInt(UVMin.X * Level->GridDimensions.X), 0, Level->GridDimensions.X - 1);
-	const int32 MinY = FMath::Clamp(FMath::FloorToInt(UVMin.Y * Level->GridDimensions.Y), 0, Level->GridDimensions.Y - 1);
-	const int32 MaxX = FMath::Clamp(FMath::FloorToInt(UVMax.X * Level->GridDimensions.X), 0, Level->GridDimensions.X - 1);
-	const int32 MaxY = FMath::Clamp(FMath::FloorToInt(UVMax.Y * Level->GridDimensions.Y), 0, Level->GridDimensions.Y - 1);
-
 	for (const FMinimapTileRef& Tile : Level->Tiles)
 	{
-		if (Tile.Coord.X >= MinX && Tile.Coord.X <= MaxX && Tile.Coord.Y >= MinY && Tile.Coord.Y <= MaxY)
+		FVector2D TileUVMin;
+		FVector2D TileUVMax;
+		NormalizeUVRect(Tile.UVMin, Tile.UVMax, TileUVMin, TileUVMax);
+		if (UVRectsIntersect(UVMin, UVMax, TileUVMin, TileUVMax))
 		{
+			WarnIfTileUVDoesNotMatchGrid(TileSet, Tile, Level->GridDimensions);
 			OutTiles.Add(Tile);
 		}
 	}
+
+	OutTiles.Sort([](const FMinimapTileRef& A, const FMinimapTileRef& B)
+	{
+		if (A.Coord.LOD != B.Coord.LOD)
+		{
+			return A.Coord.LOD < B.Coord.LOD;
+		}
+		if (A.Coord.Y != B.Coord.Y)
+		{
+			return A.Coord.Y < B.Coord.Y;
+		}
+		return A.Coord.X < B.Coord.X;
+	});
 }
 
 int32 UMinimapBlueprintLibrary::ChooseTileLODForWorldUnitsPerPixel(const UMinimapTileSetDataAsset* TileSet,
@@ -210,12 +285,15 @@ int32 UMinimapBlueprintLibrary::ChooseTileLODForWorldUnitsPerPixel(const UMinima
 	float BestError = TNumericLimits<float>::Max();
 	for (const FMinimapTilePyramidLevel& Level : TileSet->PyramidLevels)
 	{
-		if (Level.TilePixelSize.X <= 0 || Level.WorldTileSize.X <= 0.0f)
+		if (Level.TilePixelSize.X <= 0 || Level.TilePixelSize.Y <= 0
+			|| Level.WorldTileSize.X <= 0.0f || Level.WorldTileSize.Y <= 0.0f)
 		{
 			continue;
 		}
 
-		const float LevelWorldUnitsPerPixel = Level.WorldTileSize.X / static_cast<float>(Level.TilePixelSize.X);
+		const float LevelWorldUnitsPerPixel = FMath::Max(
+			Level.WorldTileSize.X / static_cast<float>(Level.TilePixelSize.X),
+			Level.WorldTileSize.Y / static_cast<float>(Level.TilePixelSize.Y));
 		const float Error = FMath::Abs(LevelWorldUnitsPerPixel - RequestedWorldUnitsPerPixel);
 		if (Error < BestError)
 		{

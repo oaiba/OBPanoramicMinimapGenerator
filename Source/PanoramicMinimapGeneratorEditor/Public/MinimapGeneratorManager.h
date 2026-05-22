@@ -355,7 +355,17 @@ private:
 	void CaptureNextTileSetTile();
 	void OnTileSetTileRenderedAndContinue();
 	void FinalizeTileSetExport();
-	FBox GetTileSetTileWorldBounds(int32 LOD, int32 TileX, int32 TileY) const;
+	struct FMinimapTileCaptureFrame
+	{
+		FVector2D UVMin = FVector2D::ZeroVector;
+		FVector2D UVMax = FVector2D::ZeroVector;
+		FBox WorldBounds = FBox(ForceInit);
+		FVector WorldCenter = FVector::ZeroVector;
+		float CaptureOrthoWidth = 0.0f;
+		float CaptureWorldHeight = 0.0f;
+		FIntPoint TilePixelSize = FIntPoint::ZeroValue;
+	};
+	FMinimapTileCaptureFrame BuildTileSetTileCaptureFrame(int32 LOD, int32 TileX, int32 TileY) const;
 	FString NormalizePackagePath(const FString& InPackagePath) const;
 
 	bool bIsSingleCaptureMode = false;

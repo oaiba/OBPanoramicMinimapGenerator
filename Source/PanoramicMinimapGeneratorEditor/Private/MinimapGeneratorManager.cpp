@@ -90,6 +90,50 @@ namespace
 {
 constexpr int64 MaxLegacyStitchedPixels = 8192LL * 8192LL;
 
+FIntPoint CalculateTileSetTilePixelSize(const FVector2D& WorldTileSize, const int32 MaxPixelDimension)
+{
+	const int32 SafeMaxPixelDimension = FMath::Max(1, MaxPixelDimension);
+	if (WorldTileSize.X <= 0.0f || WorldTileSize.Y <= 0.0f)
+	{
+		return FIntPoint(SafeMaxPixelDimension, SafeMaxPixelDimension);
+	}
+
+	const float AspectRatio = WorldTileSize.X / WorldTileSize.Y;
+	if (AspectRatio >= 1.0f)
+	{
+		return FIntPoint(
+			SafeMaxPixelDimension,
+			FMath::Max(1, FMath::RoundToInt(static_cast<float>(SafeMaxPixelDimension) / AspectRatio)));
+	}
+
+	return FIntPoint(
+		FMath::Max(1, FMath::RoundToInt(static_cast<float>(SafeMaxPixelDimension) * AspectRatio)),
+		SafeMaxPixelDimension);
+}
+
+FVector2D CalculateCaptureViewWorldSize(const FBox& CaptureBounds, const FIntPoint& OutputSize)
+{
+	const FVector BoundsSize = CaptureBounds.GetSize();
+	const float AspectRatio = OutputSize.Y > 0
+		                          ? static_cast<float>(FMath::Max(1, OutputSize.X)) / static_cast<float>(OutputSize.Y)
+		                          : 1.0f;
+
+	if (AspectRatio >= 1.0f)
+	{
+		const float Width = FMath::Max(BoundsSize.X, BoundsSize.Y * AspectRatio);
+		return FVector2D(Width, Width / AspectRatio);
+	}
+
+	const float Height = FMath::Max(BoundsSize.Y, BoundsSize.X / AspectRatio);
+	return FVector2D(Height * AspectRatio, Height);
+}
+
+FVector FlattenedSafeAxis(FVector Axis, const FVector& Fallback)
+{
+	Axis.Z = 0.0f;
+	return Axis.Normalize() ? Axis : Fallback;
+}
+
 static TAutoConsoleVariable<int32> CVarPanoramicMemoryTrace(
 	TEXT("OB.Panoramic.MemoryTrace"),
 	0,
@@ -129,6 +173,12 @@ FString MakeSafeAssetName(const FString& InName)
 	SafeName.ReplaceInline(TEXT("/"), TEXT("_"));
 	SafeName.ReplaceInline(TEXT("\\"), TEXT("_"));
 	return SafeName.IsEmpty() ? TEXT("Minimap") : SafeName;
+}
+
+FDateTime GetLocalNamingTimeFromUtc(const FDateTime& UtcTime)
+{
+	const FTimespan LocalUtcOffset = FDateTime::Now() - FDateTime::UtcNow();
+	return UtcTime + LocalUtcOffset;
 }
 
 bool DoesLongPackageFileExist(const FString& LongPackageName)
@@ -257,7 +307,8 @@ void UMinimapGeneratorManager::InitializeCaptureRunIdentity()
 
 	const FString SafeFileName = MakeSafeAssetName(Settings.FileName);
 	const FString SafeMapName = MakeSafeAssetName(CaptureSourceMapName.IsEmpty() ? TEXT("UnknownMap") : CaptureSourceMapName);
-	const FString Timestamp = CaptureStartedAtUtc.ToString(TEXT("%Y%m%d_%H%M%S"));
+	const FDateTime CaptureStartedAtNamingTime = GetLocalNamingTimeFromUtc(CaptureStartedAtUtc);
+	const FString Timestamp = CaptureStartedAtNamingTime.ToString(TEXT("%Y%m%d_%H%M%S"));
 	const FString DesiredRunId = FString::Printf(TEXT("%s_%s_%s"), *SafeFileName, *SafeMapName, *Timestamp);
 
 	CaptureRunId = DesiredRunId;
@@ -285,11 +336,13 @@ void UMinimapGeneratorManager::InitializeCaptureRunIdentity()
 	CaptureRunDisplayName = FString::Printf(TEXT("%s (%s) %s"),
 		*Settings.FileName,
 		*CaptureSourceMapName,
-		*CaptureStartedAtUtc.ToString(TEXT("%Y-%m-%d %H:%M:%S UTC")));
+		*CaptureStartedAtNamingTime.ToString(TEXT("%Y-%m-%d %H:%M:%S Local")));
 
-	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANORUN][RUN_CREATED] RunId=%s DisplayName=%s SourceMapPackage=%s SourceMapName=%s"),
+	UE_LOG(OBPanoramicMinimapGenerator, Log, TEXT("[PANORUN][RUN_CREATED] RunId=%s DisplayName=%s TimestampUtc=%s TimestampNamingLocal=%s SourceMapPackage=%s SourceMapName=%s"),
 		*CaptureRunId,
 		*CaptureRunDisplayName,
+		*CaptureStartedAtUtc.ToString(TEXT("%Y-%m-%d %H:%M:%S UTC")),
+		*CaptureStartedAtNamingTime.ToString(TEXT("%Y-%m-%d %H:%M:%S Local")),
 		CaptureSourceMapPackage.IsEmpty() ? TEXT("none") : *CaptureSourceMapPackage,
 		*CaptureSourceMapName);
 
@@ -1483,11 +1536,18 @@ UTextureRenderTarget2D* UMinimapGeneratorManager::CreateRenderTarget()
 		Settings.bUseTiling ? TEXT("true") : TEXT("false"),
 		Settings.bExportTileSet ? TEXT("true") : TEXT("false"),
 		CurrentTileLOD));
-	const int32 TileSetResolution = (Settings.bExportTileSet && CurrentTileLOD == 0)
-		                                ? Settings.TileSetOverviewResolution
-		                                : Settings.TileResolution;
-	const int32 TargetWidth = Settings.bUseTiling ? TileSetResolution : Settings.OutputWidth;
-	const int32 TargetHeight = Settings.bUseTiling ? TileSetResolution : Settings.OutputHeight;
+	FIntPoint TargetSize(Settings.OutputWidth, Settings.OutputHeight);
+	if (Settings.bExportTileSet && TileSetExportLevels.IsValidIndex(CurrentTileLOD))
+	{
+		TargetSize = TileSetExportLevels[CurrentTileLOD].TilePixelSize;
+	}
+	else if (Settings.bUseTiling)
+	{
+		TargetSize = FIntPoint(Settings.TileResolution, Settings.TileResolution);
+	}
+
+	const int32 TargetWidth = FMath::Max(1, TargetSize.X);
+	const int32 TargetHeight = FMath::Max(1, TargetSize.Y);
 	Telemetry.RenderTargetSize = FIntPoint(TargetWidth, TargetHeight);
 	BroadcastTelemetry();
 
@@ -1752,7 +1812,7 @@ void UMinimapGeneratorManager::StartImageSaveTask(TArray<FColor> PixelData, int3
 		}
 		else
 		{
-			const FDateTime Now = FDateTime::Now();
+			const FDateTime Now = GetLocalNamingTimeFromUtc(FDateTime::UtcNow());
 			const FString Timestamp = Now.ToString(TEXT("_%Y%m%d_%H%M%S"));
 			FinalFileName += Timestamp;
 		}
@@ -1919,14 +1979,23 @@ void UMinimapGeneratorManager::InitializeTileSetExportLevels()
 		const FIntPoint GridDimensions(
 			LOD == MaxLOD ? FullTilesX : FMath::Clamp(TargetGrid, 1, FullTilesX),
 			LOD == MaxLOD ? FullTilesY : FMath::Clamp(TargetGrid, 1, FullTilesY));
-		const int32 TilePixels = LOD == 0 ? Settings.TileSetOverviewResolution : Settings.TileResolution;
+		const int32 MaxTilePixels = LOD == 0 ? Settings.TileSetOverviewResolution : Settings.TileResolution;
+		const FVector2D FullCaptureWorldSize = CalculateCaptureViewWorldSize(
+			Settings.CaptureBounds,
+			FIntPoint(Settings.OutputWidth, Settings.OutputHeight));
+		const FVector2D CaptureWorldSize(
+			FullCaptureWorldSize.X / static_cast<float>(GridDimensions.X),
+			FullCaptureWorldSize.Y / static_cast<float>(GridDimensions.Y));
+		const FVector2D WorldTileSize(BoundsSize.X / GridDimensions.X, BoundsSize.Y / GridDimensions.Y);
 
 		FMinimapTilePyramidLevel Level;
 		Level.LOD = LOD;
 		Level.GridDimensions = GridDimensions;
-		Level.TilePixelSize = FIntPoint(TilePixels, TilePixels);
-		Level.WorldTileSize = FVector2D(BoundsSize.X / GridDimensions.X, BoundsSize.Y / GridDimensions.Y);
-		Level.LogicalPixelSize = FIntPoint(GridDimensions.X * TilePixels, GridDimensions.Y * TilePixels);
+		Level.TilePixelSize = CalculateTileSetTilePixelSize(CaptureWorldSize, MaxTilePixels);
+		Level.WorldTileSize = WorldTileSize;
+		Level.LogicalPixelSize = FIntPoint(
+			GridDimensions.X * Level.TilePixelSize.X,
+			GridDimensions.Y * Level.TilePixelSize.Y);
 		Level.Tiles.Reserve(GridDimensions.X * GridDimensions.Y);
 		TileSetExportLevels.Add(Level);
 	}
@@ -1972,28 +2041,66 @@ bool UMinimapGeneratorManager::AdvanceToNextTileSetLevel()
 	return IsValid(ActiveCaptureComponent) && IsValid(ActiveRenderTarget);
 }
 
-FBox UMinimapGeneratorManager::GetTileSetTileWorldBounds(const int32 LOD, const int32 TileX, const int32 TileY) const
+UMinimapGeneratorManager::FMinimapTileCaptureFrame UMinimapGeneratorManager::BuildTileSetTileCaptureFrame(
+	const int32 LOD, const int32 TileX, const int32 TileY) const
 {
+	FMinimapTileCaptureFrame Frame;
 	if (!TileSetExportLevels.IsValidIndex(LOD))
 	{
-		return FBox(ForceInit);
+		return Frame;
 	}
 
 	const FMinimapTilePyramidLevel& Level = TileSetExportLevels[LOD];
-	const FVector BoundsMin = Settings.CaptureBounds.Min;
-	const FVector BoundsMax = Settings.CaptureBounds.Max;
-	const FVector2D TileWorldSize = Level.WorldTileSize;
+	if (Level.GridDimensions.X <= 0 || Level.GridDimensions.Y <= 0)
+	{
+		return Frame;
+	}
 
-	const FVector TileMin(
-		BoundsMin.X + TileX * TileWorldSize.X,
-		TileY == Level.GridDimensions.Y - 1 ? BoundsMin.Y : BoundsMax.Y - (TileY + 1) * TileWorldSize.Y,
-		BoundsMin.Z);
-	const FVector TileMax(
-		TileX == Level.GridDimensions.X - 1 ? BoundsMax.X : TileMin.X + TileWorldSize.X,
-		BoundsMax.Y - TileY * TileWorldSize.Y,
-		BoundsMax.Z);
+	Frame.UVMin = FVector2D(
+		static_cast<float>(TileX) / static_cast<float>(Level.GridDimensions.X),
+		static_cast<float>(TileY) / static_cast<float>(Level.GridDimensions.Y));
+	Frame.UVMax = FVector2D(
+		static_cast<float>(TileX + 1) / static_cast<float>(Level.GridDimensions.X),
+		static_cast<float>(TileY + 1) / static_cast<float>(Level.GridDimensions.Y));
 
-	return FBox(TileMin, TileMax);
+	Frame.WorldBounds = FBox(ForceInit);
+
+	const FVector CameraRight = FlattenedSafeAxis(FRotationMatrix(Settings.CameraRotation).GetScaledAxis(EAxis::Y), FVector::RightVector);
+	const FVector CameraUp = FlattenedSafeAxis(FRotationMatrix(Settings.CameraRotation).GetScaledAxis(EAxis::Z), FVector::ForwardVector);
+	const FVector2D FullCaptureWorldSize = CalculateCaptureViewWorldSize(
+		Settings.CaptureBounds,
+		FIntPoint(Settings.OutputWidth, Settings.OutputHeight));
+	const FVector2D UVCenter = (Frame.UVMin + Frame.UVMax) * 0.5f;
+	Frame.WorldCenter = Settings.CaptureBounds.GetCenter()
+		+ CameraRight * ((UVCenter.X - 0.5f) * FullCaptureWorldSize.X)
+		+ CameraUp * ((0.5f - UVCenter.Y) * FullCaptureWorldSize.Y);
+	Frame.CaptureOrthoWidth = FMath::Max((Frame.UVMax.X - Frame.UVMin.X) * FullCaptureWorldSize.X, KINDA_SMALL_NUMBER);
+	Frame.CaptureWorldHeight = FMath::Max((Frame.UVMax.Y - Frame.UVMin.Y) * FullCaptureWorldSize.Y, KINDA_SMALL_NUMBER);
+
+	const FVector CaptureCorners[] = {
+		Settings.CaptureBounds.GetCenter()
+			+ CameraRight * ((Frame.UVMin.X - 0.5f) * FullCaptureWorldSize.X)
+			+ CameraUp * ((0.5f - Frame.UVMin.Y) * FullCaptureWorldSize.Y),
+		Settings.CaptureBounds.GetCenter()
+			+ CameraRight * ((Frame.UVMax.X - 0.5f) * FullCaptureWorldSize.X)
+			+ CameraUp * ((0.5f - Frame.UVMin.Y) * FullCaptureWorldSize.Y),
+		Settings.CaptureBounds.GetCenter()
+			+ CameraRight * ((Frame.UVMin.X - 0.5f) * FullCaptureWorldSize.X)
+			+ CameraUp * ((0.5f - Frame.UVMax.Y) * FullCaptureWorldSize.Y),
+		Settings.CaptureBounds.GetCenter()
+			+ CameraRight * ((Frame.UVMax.X - 0.5f) * FullCaptureWorldSize.X)
+			+ CameraUp * ((0.5f - Frame.UVMax.Y) * FullCaptureWorldSize.Y)
+	};
+
+	for (const FVector& CaptureCorner : CaptureCorners)
+	{
+		Frame.WorldBounds += CaptureCorner;
+	}
+
+	Frame.WorldBounds.Min.Z = Settings.CaptureBounds.Min.Z;
+	Frame.WorldBounds.Max.Z = Settings.CaptureBounds.Max.Z;
+	Frame.TilePixelSize = Level.TilePixelSize;
+	return Frame;
 }
 
 void UMinimapGeneratorManager::CaptureNextTileSetTile()
@@ -2033,9 +2140,7 @@ void UMinimapGeneratorManager::CaptureNextTileSetTile()
 
 	const int32 TileX = CurrentTileIndex % Level.GridDimensions.X;
 	const int32 TileY = CurrentTileIndex / Level.GridDimensions.X;
-	const FBox TileWorldBounds = GetTileSetTileWorldBounds(CurrentTileLOD, TileX, TileY);
-	const FVector TileCenter = TileWorldBounds.GetCenter();
-	const FVector TileSize = TileWorldBounds.GetSize();
+	const FMinimapTileCaptureFrame TileCaptureFrame = BuildTileSetTileCaptureFrame(CurrentTileLOD, TileX, TileY);
 
 	int32 TotalTiles = 0;
 	int32 CompletedBeforeLevel = 0;
@@ -2061,9 +2166,15 @@ void UMinimapGeneratorManager::CaptureNextTileSetTile()
 		TileY));
 
 	USceneCaptureComponent2D* CaptureComponent = ActiveCaptureComponent.Get();
-	CaptureComponent->SetWorldLocation(FVector(TileCenter.X, TileCenter.Y, Settings.CameraHeight));
-	CaptureComponent->OrthoWidth = FMath::Max(TileSize.X, TileSize.Y);
+	CaptureComponent->SetWorldLocation(FVector(TileCaptureFrame.WorldCenter.X, TileCaptureFrame.WorldCenter.Y, Settings.CameraHeight));
+	CaptureComponent->OrthoWidth = TileCaptureFrame.CaptureOrthoWidth;
 	CaptureComponent->CaptureScene();
+
+	UE_LOG(OBPanoramicMinimapGenerator, Verbose,
+	       TEXT("Tile-set capture frame LOD=%d X=%d Y=%d UVMin=%s UVMax=%s WorldCenter=%s OrthoWidth=%.2f WorldHeight=%.2f PixelSize=%dx%d"),
+	       CurrentTileLOD, TileX, TileY, *TileCaptureFrame.UVMin.ToString(), *TileCaptureFrame.UVMax.ToString(),
+	       *TileCaptureFrame.WorldCenter.ToString(), TileCaptureFrame.CaptureOrthoWidth,
+	       TileCaptureFrame.CaptureWorldHeight, TileCaptureFrame.TilePixelSize.X, TileCaptureFrame.TilePixelSize.Y);
 
 	const float CurrentProgress = TotalTiles > 0 ? static_cast<float>(CompletedTiles) / TotalTiles : 0.0f;
 	OnProgress.Broadcast(
@@ -2153,9 +2264,7 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 			*TextureAssetName,
 			Telemetry.LastImportSeconds));
 
-		const FBox TileWorldBounds = GetTileSetTileWorldBounds(CurrentTileLOD, TileX, TileY);
-		const FVector BoundsSize = Settings.CaptureBounds.GetSize();
-		const FVector BoundsMin = Settings.CaptureBounds.Min;
+		const FMinimapTileCaptureFrame TileCaptureFrame = BuildTileSetTileCaptureFrame(CurrentTileLOD, TileX, TileY);
 
 		FMinimapTileRef TileRef;
 		TileRef.Coord.LOD = CurrentTileLOD;
@@ -2164,21 +2273,22 @@ void UMinimapGeneratorManager::OnTileSetTileRenderedAndContinue()
 		TileRef.Texture = TileTexture;
 		TileRef.ValidPixelMin = FIntPoint::ZeroValue;
 		TileRef.ValidPixelMax = FIntPoint(TileWidth, TileHeight);
-		TileRef.WorldBounds = TileWorldBounds;
-		TileRef.UVMin = FVector2D(
-			(TileWorldBounds.Min.X - BoundsMin.X) / BoundsSize.X,
-			1.0f - ((TileWorldBounds.Max.Y - BoundsMin.Y) / BoundsSize.Y));
-		TileRef.UVMax = FVector2D(
-			(TileWorldBounds.Max.X - BoundsMin.X) / BoundsSize.X,
-			1.0f - ((TileWorldBounds.Min.Y - BoundsMin.Y) / BoundsSize.Y));
+		TileRef.WorldBounds = TileCaptureFrame.WorldBounds;
+		TileRef.UVMin = TileCaptureFrame.UVMin;
+		TileRef.UVMax = TileCaptureFrame.UVMax;
 		Level.Tiles.Add(TileRef);
 
 		TilePixels.Empty();
 		TilePixels.Shrink();
-		TracePanoramicMemory(TEXT("TILESET_TILE_BUFFER_RELEASED"), FString::Printf(TEXT("LOD=%d X=%d Y=%d LevelTiles=%d"),
+		TracePanoramicMemory(TEXT("TILESET_TILE_BUFFER_RELEASED"), FString::Printf(TEXT("LOD=%d X=%d Y=%d UVMin=%s UVMax=%s WorldCenter=%s OrthoWidth=%.2f WorldHeight=%.2f LevelTiles=%d"),
 			CurrentTileLOD,
 			TileX,
 			TileY,
+			*TileCaptureFrame.UVMin.ToString(),
+			*TileCaptureFrame.UVMax.ToString(),
+			*TileCaptureFrame.WorldCenter.ToString(),
+			TileCaptureFrame.CaptureOrthoWidth,
+			TileCaptureFrame.CaptureWorldHeight,
 			Level.Tiles.Num()));
 		MaybeRunTileSetMemoryMaintenance(TEXT("PostTile"));
 	}
