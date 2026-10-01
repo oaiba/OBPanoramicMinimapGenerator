@@ -334,10 +334,6 @@ Builds verified during implementation:
 "/Users/Shared/Epic Games/UE_5.7/Engine/Build/BatchFiles/Mac/Build.sh" OBExtraction Mac Development -Project="/Users/phambaoai/UEProject/OBExtraction/OBExtraction.uproject" -NoHotReloadFromIDE
 ```
 
-Known external warning:
-
-- The project currently reports `StructUtils` deprecation warnings from `ExtractionCoreGame`. This is outside this plugin.
-
 ## Known Limitations
 
 - Overlay authoring is currently based on selected actors, not direct drawing on the preview canvas.
