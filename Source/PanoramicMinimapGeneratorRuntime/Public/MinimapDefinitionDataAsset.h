@@ -151,9 +151,6 @@ class PANORAMICMINIMAPGENERATORRUNTIME_API UMinimapTileSetDataAsset : public UDa
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "TileSet")
-	int32 SchemaVersion = 1;
-
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Capture")
 	FString CaptureRunId;
 

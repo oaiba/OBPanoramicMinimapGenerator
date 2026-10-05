@@ -957,7 +957,6 @@ UMinimapTileSetDataAsset* UMinimapGeneratorManager::CreateOrUpdateTileSetAsset()
 		AssetRegistryModule.AssetCreated(TileSetAsset);
 	}
 
-	TileSetAsset->SchemaVersion = 1;
 	TileSetAsset->WorldBounds = Settings.CaptureBounds;
 	TileSetAsset->OutputSize = FIntPoint(Settings.OutputWidth, Settings.OutputHeight);
 	TileSetAsset->MapRotationDegrees = Settings.CameraRotation.Yaw;
